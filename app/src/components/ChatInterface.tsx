@@ -16,36 +16,36 @@ interface ChatInterfaceProps {
 
 const SUGGESTED_QUERIES = [
   {
-    label: "Facturas pendientes",
-    query: "¿Cuantas facturas estan pendientes de pago y cual es el monto total?",
+    label: "Resumen general",
+    query: "Dame un resumen general de los datos: cuántas filas hay, cuántas columnas, y los totales principales",
   },
   {
-    label: "Total por proveedor",
-    query: "Muestra una tabla con el monto total facturado por cada proveedor",
+    label: "📊 Top por área",
+    query: "Muestra el top 10 de unidades responsables por monto total, con gráfica de barras",
   },
   {
-    label: "Errores detectados",
-    query: "¿Que registros tienen errores detectados o inconsistencias? Explicame cada uno",
+    label: "⚠️ Campos vacíos",
+    query: "¿Qué columnas tienen campos vacíos? Muéstrame cuántos vacíos tiene cada una",
   },
   {
-    label: "Resumen por area",
-    query: "Dame un resumen de gasto por unidad responsable (nombre_ur) con totales",
+    label: "🔁 Duplicados",
+    query: "¿Hay registros duplicados en los datos? Identifícalos y muestra cuáles son",
   },
   {
-    label: "Sin suficiencia",
-    query: "¿Que partidas no tienen suficiencia presupuestal y que montos representan?",
+    label: "📈 Estadísticas",
+    query: "Dame estadísticas completas de todas las columnas numéricas: suma, promedio, mín, máx",
   },
   {
-    label: "Contratos excedidos",
-    query: "¿Hay contratos donde el monto pagado exceda el importe maximo? Detalla cuales",
+    label: "🥧 Distribución",
+    query: "Muestra una gráfica de pastel con la distribución del gasto por las 8 categorías principales",
   },
   {
-    label: "Grafica por mes",
-    query: "Genera una grafica de barras con el monto total facturado por mes",
+    label: "🔢 Conteos",
+    query: "¿Cuántos valores únicos hay en cada columna? Ordena de mayor a menor",
   },
   {
-    label: "Distribucion por area",
-    query: "Muestra una grafica de pastel con la distribucion del gasto por unidad responsable (nombre_ur)",
+    label: "📉 Outliers",
+    query: "¿Hay valores atípicos o outliers en las columnas numéricas? Identifícalos",
   },
 ];
 

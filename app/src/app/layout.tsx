@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Consulta de Datos con IA",
-  description: "Sube un CSV o conecta un Google Sheet y consulta tus datos con inteligencia artificial",
+  title: "CCINSHAE",
+  description: "Agente de análisis de precisión de gastos",
 };
 
 export default function RootLayout({

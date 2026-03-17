@@ -96,10 +96,10 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-sm font-semibold leading-none">
-                Consulta de Facturación
+                CCINSHAE
               </h1>
               <p className="text-[11px] text-muted-foreground leading-none mt-0.5">
-                Análisis inteligente · Estándar CCINSHAE
+                Agente de análisis de precisión de gastos
               </p>
             </div>
           </div>
@@ -119,7 +119,7 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)]">
             <div className="text-center mb-8 space-y-3">
               <h2 className="text-2xl font-bold tracking-tight">
-                Analiza tus datos de facturación
+                Analiza los datos de las precisiones de gastos
               </h2>
               <p className="text-muted-foreground max-w-md mx-auto">
                 Carga un archivo CSV, Excel o conecta un Google Sheet para

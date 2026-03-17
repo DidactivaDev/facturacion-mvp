@@ -87,8 +87,7 @@ function findAllColumns(
 }
 
 /**
- * Parsea un valor monetario que puede venir en formato mexicano:
- * "$ 204,987.00", "$204987", "204,987.00", "$ -", etc.
+ * Parsea un valor monetario
  */
 function parseMoney(raw: unknown): number {
   if (raw === null || raw === undefined) return 0;

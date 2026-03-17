@@ -1,25 +1,87 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import FileUploader from "@/components/FileUploader";
 import DataPreview from "@/components/DataPreview";
 import ChatInterface from "@/components/ChatInterface";
 import KPIDashboard from "@/components/KPIDashboard";
+import QualityReportView from "@/components/QualityReport";
+import ColumnMapperView from "@/components/ColumnMapper";
+import StandardExporter from "@/components/StandardExporter";
 import type { ParsedData } from "@/lib/csv-parser";
+import { autoMapColumns, type ColumnMapping } from "@/lib/column-mapper";
+import { analyzeQuality, type QualityReport } from "@/lib/data-quality";
+
+type Tab = "data" | "quality" | "standard" | "chat";
 
 export default function Home() {
   const [data, setData] = useState<ParsedData | null>(null);
   const [source, setSource] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<Tab>("quality");
+  const [mappings, setMappings] = useState<ColumnMapping[]>([]);
+  const [report, setReport] = useState<QualityReport | null>(null);
 
   const handleDataLoaded = useCallback((parsed: ParsedData, src: string) => {
     setData(parsed);
     setSource(src);
+
+    // Auto-mapeo
+    const autoMappings = autoMapColumns(parsed.headers);
+    setMappings(autoMappings);
+
+    // Análisis de calidad
+    const qualityReport = analyzeQuality(parsed, autoMappings, src);
+    setReport(qualityReport);
+
+    // Si hay alertas altas, mostrar calidad primero; si no, mostrar datos
+    setActiveTab(qualityReport.summary.highAlerts > 0 ? "quality" : "data");
   }, []);
 
   const handleClear = useCallback(() => {
     setData(null);
     setSource("");
+    setMappings([]);
+    setReport(null);
+    setActiveTab("quality");
   }, []);
+
+  const handleMappingsChange = useCallback(
+    (newMappings: ColumnMapping[]) => {
+      setMappings(newMappings);
+      // Recalcular calidad con el nuevo mapeo
+      if (data) {
+        const newReport = analyzeQuality(data, newMappings, source);
+        setReport(newReport);
+      }
+    },
+    [data, source]
+  );
+
+  const tabs: { id: Tab; label: string; badge?: string }[] = useMemo(() => {
+    return [
+      { id: "data" as Tab, label: "Datos" },
+      {
+        id: "quality" as Tab,
+        label: "Calidad",
+        badge: report
+          ? report.summary.highAlerts > 0
+            ? `${report.summary.highAlerts}`
+            : report.summary.totalAlerts > 0
+            ? `${report.summary.totalAlerts}`
+            : "✓"
+          : undefined,
+      },
+      {
+        id: "standard" as Tab,
+        label: "Estándar CCINSHAE",
+        badge:
+          mappings.length > 0
+            ? `${mappings.filter((m) => m.sourceColumn !== null).length}/${mappings.length}`
+            : undefined,
+      },
+      { id: "chat" as Tab, label: "Chat IA" },
+    ];
+  }, [report, mappings]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -34,17 +96,17 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-sm font-semibold leading-none">
-                Consulta de Facturacion
+                Consulta de Facturación
               </h1>
               <p className="text-[11px] text-muted-foreground leading-none mt-0.5">
-                Analisis inteligente de datos
+                Análisis inteligente · Estándar CCINSHAE
               </p>
             </div>
           </div>
           {data && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              {data.totalRows} registros cargados
+              {data.totalRows} registros · {source}
             </div>
           )}
         </div>
@@ -57,11 +119,12 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)]">
             <div className="text-center mb-8 space-y-3">
               <h2 className="text-2xl font-bold tracking-tight">
-                Analiza tus datos de facturacion
+                Analiza tus datos de facturación
               </h2>
               <p className="text-muted-foreground max-w-md mx-auto">
-                Carga un archivo CSV o conecta un Google Sheet para hacer
-                consultas en lenguaje natural con inteligencia artificial
+                Carga un archivo CSV, Excel o conecta un Google Sheet para
+                analizar calidad, estandarizar al formato CCINSHAE y consultar
+                con inteligencia artificial
               </p>
             </div>
             <FileUploader onDataLoaded={handleDataLoaded} />
@@ -72,11 +135,85 @@ export default function Home() {
             {/* KPI Cards */}
             <KPIDashboard data={data} />
 
-            {/* Collapsible data preview */}
-            <DataPreview data={data} source={source} onClear={handleClear} />
+            {/* Tabs */}
+            <div className="border-b">
+              <nav className="flex gap-1" aria-label="Tabs">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`relative px-4 py-2.5 text-sm font-medium transition-colors rounded-t-lg ${
+                      activeTab === tab.id
+                        ? "text-primary bg-card border border-b-0 border-border -mb-px"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      {tab.label}
+                      {tab.badge && (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                            activeTab === tab.id
+                              ? "bg-primary/10 text-primary"
+                              : tab.id === "quality" &&
+                                report &&
+                                report.summary.highAlerts > 0
+                              ? "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {tab.badge}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </nav>
+            </div>
 
-            {/* Chat */}
-            <ChatInterface data={data} />
+            {/* Tab content */}
+            <div className="min-h-[400px]">
+              {activeTab === "data" && (
+                <DataPreview
+                  data={data}
+                  source={source}
+                  onClear={handleClear}
+                />
+              )}
+
+              {activeTab === "quality" && report && (
+                <QualityReportView report={report} />
+              )}
+
+              {activeTab === "standard" && report && (
+                <div className="space-y-6">
+                  <div className="rounded-xl border bg-card p-5">
+                    <h3 className="text-sm font-semibold text-foreground mb-1">
+                      Mapeo de columnas
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-4">
+                      Revisa y ajusta cómo se mapean las columnas de tu archivo
+                      al estándar CCINSHAE v0. El auto-mapeo ya sugirió
+                      coincidencias.
+                    </p>
+                    <ColumnMapperView
+                      mappings={mappings}
+                      sourceHeaders={data.headers}
+                      onMappingsChange={handleMappingsChange}
+                    />
+                  </div>
+
+                  <StandardExporter
+                    data={data}
+                    mappings={mappings}
+                    report={report}
+                    source={source}
+                  />
+                </div>
+              )}
+
+              {activeTab === "chat" && <ChatInterface data={data} />}
+            </div>
           </div>
         )}
       </main>

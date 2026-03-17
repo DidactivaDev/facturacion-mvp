@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,13 +19,28 @@ interface DataPreviewProps {
   onClear: () => void;
 }
 
+const PAGE_SIZES = [8, 25, 50, 100] as const;
+
 export default function DataPreview({
   data,
   source,
   onClear,
 }: DataPreviewProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const previewRows = data.rows.slice(0, 8);
+  const [pageSize, setPageSize] = useState<number>(8);
+  const [currentPage, setCurrentPage] = useState(0);
+
+  const totalPages = Math.ceil(data.totalRows / pageSize);
+
+  const visibleRows = useMemo(() => {
+    const start = currentPage * pageSize;
+    return data.rows.slice(start, start + pageSize);
+  }, [data.rows, currentPage, pageSize]);
+
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size);
+    setCurrentPage(0);
+  };
 
   return (
     <div className="rounded-xl border bg-card overflow-hidden">
@@ -71,41 +86,133 @@ export default function DataPreview({
 
       {/* Expandable table */}
       {isExpanded && (
-        <div className="overflow-auto max-h-[350px] custom-scrollbar">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/20">
-                {data.headers.map((header) => (
-                  <TableHead
-                    key={header}
-                    className="whitespace-nowrap text-xs font-semibold sticky top-0 bg-muted/80 backdrop-blur-sm"
-                  >
-                    {header}
+        <>
+          <div className="overflow-auto max-h-[500px] custom-scrollbar">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/20">
+                  <TableHead className="whitespace-nowrap text-xs font-semibold sticky top-0 bg-muted/80 backdrop-blur-sm text-muted-foreground w-[50px]">
+                    #
                   </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {previewRows.map((row, i) => (
-                <TableRow key={i} className="hover:bg-muted/30">
                   {data.headers.map((header) => (
-                    <TableCell
+                    <TableHead
                       key={header}
-                      className="whitespace-nowrap text-xs py-2"
+                      className="whitespace-nowrap text-xs font-semibold sticky top-0 bg-muted/80 backdrop-blur-sm"
                     >
-                      {row[header] ?? ""}
-                    </TableCell>
+                      {header}
+                    </TableHead>
                   ))}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {data.totalRows > 8 && (
-            <div className="text-center py-2 text-xs text-muted-foreground border-t bg-muted/10">
-              Mostrando 8 de {data.totalRows} filas
+              </TableHeader>
+              <TableBody>
+                {visibleRows.map((row, i) => (
+                  <TableRow key={i} className="hover:bg-muted/30">
+                    <TableCell className="whitespace-nowrap text-xs py-2 text-muted-foreground/60 font-mono">
+                      {currentPage * pageSize + i + 1}
+                    </TableCell>
+                    {data.headers.map((header) => (
+                      <TableCell
+                        key={header}
+                        className="whitespace-nowrap text-xs py-2"
+                      >
+                        {row[header] ?? ""}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Footer: pagination + page size */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-t bg-muted/10">
+            {/* Page size selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Mostrar</span>
+              <div className="flex gap-1">
+                {PAGE_SIZES.filter((s) => s <= data.totalRows || s === PAGE_SIZES[0]).map((size) => (
+                  <button
+                    key={size}
+                    onClick={() => handlePageSizeChange(size)}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${
+                      pageSize === size
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+                {data.totalRows > PAGE_SIZES[PAGE_SIZES.length - 1] && (
+                  <button
+                    onClick={() => handlePageSizeChange(data.totalRows)}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${
+                      pageSize === data.totalRows
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    Todas
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </div>
+
+            {/* Pagination controls */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {currentPage * pageSize + 1}–
+                {Math.min((currentPage + 1) * pageSize, data.totalRows)} de{" "}
+                {data.totalRows}
+              </span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setCurrentPage(0)}
+                  disabled={currentPage === 0}
+                  className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  title="Primera página"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 text-muted-foreground">
+                    <path fillRule="evenodd" d="M3.22 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 1.06L4.81 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L3.22 8.53ZM8.72 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 1 1 1.06 1.06L10.31 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L8.72 8.53Z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                  disabled={currentPage === 0}
+                  className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  title="Anterior"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 text-muted-foreground">
+                    <path fillRule="evenodd" d="M9.78 4.22a.75.75 0 0 1 0 1.06L7.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L5.47 8.53a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0Z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <span className="text-xs text-muted-foreground px-1 py-1 min-w-[60px] text-center">
+                  {currentPage + 1} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={currentPage >= totalPages - 1}
+                  className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  title="Siguiente"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 text-muted-foreground">
+                    <path fillRule="evenodd" d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages - 1)}
+                  disabled={currentPage >= totalPages - 1}
+                  className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  title="Última página"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 text-muted-foreground">
+                    <path fillRule="evenodd" d="M12.78 7.47a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.19 8 7.47 4.28a.75.75 0 0 1 1.06-1.06l4.25 4.25ZM7.28 7.47a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L5.69 8 1.97 4.28a.75.75 0 0 1 1.06-1.06l4.25 4.25Z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import Papa from "papaparse";
+import * as XLSX from "xlsx";
 
 export interface ParsedData {
   headers: string[];
@@ -11,6 +12,8 @@ export function parseCSV(csvString: string): ParsedData {
     header: true,
     skipEmptyLines: true,
     transformHeader: (h) => h.trim(),
+    transform: (value) => (typeof value === "string" ? value.trim() : String(value)),
+    dynamicTyping: false,
   });
 
   return {
@@ -26,6 +29,8 @@ export function parseCSVFile(file: File): Promise<ParsedData> {
       header: true,
       skipEmptyLines: true,
       transformHeader: (h) => h.trim(),
+      transform: (value) => (typeof value === "string" ? value.trim() : String(value)),
+      dynamicTyping: false,
       complete: (result) => {
         resolve({
           headers: result.meta.fields || [],
@@ -118,4 +123,56 @@ function getTopValues(values: string[], n: number): string {
     .slice(0, n)
     .map(([val, count]) => `"${val}" (${count})`)
     .join(", ");
+}
+
+/**
+ * Parsea un archivo XLSX y retorna ParsedData.
+ * Lee la primera hoja del workbook.
+ */
+export function parseXLSXFile(file: File): Promise<ParsedData> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) {
+          reject(new Error("El archivo Excel no tiene hojas"));
+          return;
+        }
+        const worksheet = workbook.Sheets[firstSheetName];
+        const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+          defval: "",
+        });
+
+        if (jsonData.length === 0) {
+          reject(new Error("La hoja de Excel está vacía"));
+          return;
+        }
+
+        // Convert all values to strings and trim headers
+        const headers = Object.keys(jsonData[0]).map((h) => h.trim());
+        const rows = jsonData.map((row) => {
+          const cleaned: Record<string, string> = {};
+          for (const header of headers) {
+            const rawKey = Object.keys(row).find((k) => k.trim() === header);
+            const val = rawKey ? row[rawKey] : "";
+            cleaned[header] = val !== null && val !== undefined ? String(val) : "";
+          }
+          return cleaned;
+        });
+
+        resolve({ headers, rows, totalRows: rows.length });
+      } catch (err) {
+        reject(
+          new Error(
+            `Error al leer el archivo Excel: ${err instanceof Error ? err.message : "desconocido"}`
+          )
+        );
+      }
+    };
+    reader.onerror = () => reject(new Error("Error al leer el archivo"));
+    reader.readAsArrayBuffer(file);
+  });
 }

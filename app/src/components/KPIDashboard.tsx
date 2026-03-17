@@ -13,61 +13,295 @@ interface KPI {
   color: "blue" | "green" | "amber" | "red";
 }
 
+/* ─────────── Normalización para fuzzy matching ─────────── */
+
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quita acentos
+    .replace(/[_\-()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Busca la primera columna cuyo nombre normalizado **contenga** alguno de los
+ * patrones dados, o que coincida exactamente con alguno de ellos.
+ * Devuelve el nombre original de la columna (como está en headers) o null.
+ */
+function findColumn(
+  headers: string[],
+  patterns: string[]
+): string | null {
+  const normedPatterns = patterns.map(norm);
+
+  // 1) Exact match normalizado
+  for (const h of headers) {
+    const nh = norm(h);
+    for (const p of normedPatterns) {
+      if (nh === p) return h;
+    }
+  }
+
+  // 2) Contains match — el header contiene el patrón
+  for (const h of headers) {
+    const nh = norm(h);
+    for (const p of normedPatterns) {
+      if (p.length >= 4 && nh.includes(p)) return h;
+    }
+  }
+
+  // 3) Contains match inverso — el patrón contiene el header corto
+  for (const h of headers) {
+    const nh = norm(h);
+    for (const p of normedPatterns) {
+      if (nh.length >= 4 && p.includes(nh)) return h;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Busca TODAS las columnas que coincidan con los patrones.
+ */
+function findAllColumns(
+  headers: string[],
+  patterns: string[]
+): string[] {
+  const found: string[] = [];
+  const normedPatterns = patterns.map(norm);
+
+  for (const h of headers) {
+    const nh = norm(h);
+    for (const p of normedPatterns) {
+      if (nh === p || (p.length >= 4 && nh.includes(p)) || (nh.length >= 4 && p.includes(nh))) {
+        found.push(h);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Parsea un valor monetario que puede venir en formato mexicano:
+ * "$ 204,987.00", "$204987", "204,987.00", "$ -", etc.
+ */
+function parseMoney(raw: unknown): number {
+  if (raw === null || raw === undefined) return 0;
+  const s = String(raw).trim();
+  if (!s || s === "-" || s === "$ -" || s === "$-") return 0;
+  // Quitar $, espacios, y comas de miles
+  const cleaned = s.replace(/[$\s,]/g, "");
+  const val = parseFloat(cleaned);
+  return isNaN(val) ? 0 : val;
+}
+
+function isTruthy(val: unknown): boolean {
+  if (val === true) return true;
+  if (typeof val === "string") {
+    const v = val.trim().toLowerCase();
+    return v === "true" || v === "1" || v === "si" || v === "sí" || v === "yes";
+  }
+  if (typeof val === "number") return val === 1;
+  return false;
+}
+
+function isFalsy(val: unknown): boolean {
+  if (val === false) return true;
+  if (typeof val === "string") {
+    const v = val.trim().toLowerCase();
+    return v === "false" || v === "0" || v === "no";
+  }
+  if (typeof val === "number") return val === 0;
+  return false;
+}
+
+/* ─────── Detección inteligente de columnas por concepto ─────── */
+
+/** Columna que representa el monto/importe principal */
+const MONTO_PATTERNS = [
+  "monto_factura", "monto factura", "monto o importe especifico",
+  "importe especifico", "monto pendiente", "importe", "monto",
+  "total", "monto total", "importe total", "monto_pendiente",
+];
+
+/** Columna de proveedor */
+const PROVEEDOR_PATTERNS = [
+  "proveedor", "nombre proveedor", "razon social", "razon_social",
+  "proveedor factura", "indique el proveedor", "nombre_proveedor",
+  "si cuenta con factura indique el proveedor",
+];
+
+/** Columna que indica si está facturado */
+const FACTURADO_PATTERNS = [
+  "esta_facturado", "esta facturado", "facturado",
+  "cuenta con factura", "factura recategorizada",
+  "cuenta con factura recategorizada",
+];
+
+/** Columna que indica si está pagado */
+const PAGADO_PATTERNS = [
+  "esta_pagado", "esta pagado", "pagado", "estatus pago",
+  "importe pagado", "importe pagado del contrato",
+  "monto pagado", "monto_pagado",
+];
+
+/** Columna de estatus/workflow */
+const ESTATUS_PATTERNS = [
+  "estatus_workflow", "estatus", "status", "estado",
+  "condicion", "suficiencia presupuestal",
+  "indicar la condicion actual",
+  "prioridad", "nivel de prioridad",
+];
+
 function computeKPIs(data: ParsedData): KPI[] {
   const rows = data.rows;
+  const headers = data.headers;
   const kpis: KPI[] = [];
 
-  // Total facturado
-  const totalFacturado = rows.reduce((sum, r) => {
-    const val = parseFloat(r["monto_factura"] || "0");
-    return sum + (isNaN(val) ? 0 : val);
-  }, 0);
-  kpis.push({
-    label: "Total facturado",
-    value: `$${totalFacturado.toLocaleString("es-MX")}`,
-    detail: `${rows.length} registros`,
-    color: "blue",
-  });
+  // ── Detectar columnas ──
+  const montoCol = findColumn(headers, MONTO_PATTERNS);
+  const provCol = findColumn(headers, PROVEEDOR_PATTERNS);
+  const facturadoCol = findColumn(headers, FACTURADO_PATTERNS);
+  const pagadoCol = findColumn(headers, PAGADO_PATTERNS);
+  const estatusCol = findColumn(headers, ESTATUS_PATTERNS);
 
-  // Pendientes de pago
-  const pendientes = rows.filter(
-    (r) =>
-      r["esta_facturado"]?.toUpperCase() === "TRUE" &&
-      r["esta_pagado"]?.toUpperCase() === "FALSE"
-  );
-  const montoPendiente = pendientes.reduce((sum, r) => {
-    const val = parseFloat(r["monto_factura"] || "0");
-    return sum + (isNaN(val) ? 0 : val);
-  }, 0);
-  kpis.push({
-    label: "Pendiente de pago",
-    value: `$${montoPendiente.toLocaleString("es-MX")}`,
-    detail: `${pendientes.length} facturas`,
-    color: "amber",
-  });
+  // ── KPI 1: Monto total ──
+  if (montoCol) {
+    const total = rows.reduce((sum, r) => sum + parseMoney(r[montoCol]), 0);
+    kpis.push({
+      label: "Monto total",
+      value: `$${total.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`,
+      detail: `${rows.length} registros · col: ${montoCol.substring(0, 30)}`,
+      color: "blue",
+    });
+  } else {
+    // Si no hay columna de monto, solo mostramos conteo
+    kpis.push({
+      label: "Registros",
+      value: rows.length.toLocaleString("es-MX"),
+      detail: "total de filas cargadas",
+      color: "blue",
+    });
+  }
 
-  // Proveedores
-  const proveedores = new Set(rows.map((r) => r["proveedor"]).filter(Boolean));
-  kpis.push({
-    label: "Proveedores",
-    value: proveedores.size.toString(),
-    detail: "activos en el periodo",
-    color: "green",
-  });
+  // ── KPI 2: Pendiente de pago ──
+  if (pagadoCol && montoCol) {
+    // Si hay columna de pagado numérica (como "Importe Pagado del Contrato"),
+    // pendiente = monto donde pagado = 0 o vacío
+    const pendientes = rows.filter((r) => {
+      const pagVal = parseMoney(r[pagadoCol]);
+      return pagVal === 0;
+    });
+    const montoPend = pendientes.reduce(
+      (sum, r) => sum + parseMoney(r[montoCol]),
+      0
+    );
+    kpis.push({
+      label: "Pendiente de pago",
+      value: `$${montoPend.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`,
+      detail: `${pendientes.length} registros sin pago`,
+      color: "amber",
+    });
+  } else if (facturadoCol && montoCol) {
+    // Fallback: si hay campo booleano de facturado/pagado
+    const pendientes = rows.filter(
+      (r) =>
+        isTruthy(r[facturadoCol]) &&
+        (!pagadoCol || isFalsy(r[pagadoCol]))
+    );
+    const montoPend = pendientes.reduce(
+      (sum, r) => sum + parseMoney(r[montoCol]),
+      0
+    );
+    kpis.push({
+      label: "Pendiente de pago",
+      value: `$${montoPend.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`,
+      detail: `${pendientes.length} facturas`,
+      color: "amber",
+    });
+  } else {
+    kpis.push({
+      label: "Pendiente de pago",
+      value: "N/D",
+      detail: "sin columna de pago detectada",
+      color: "amber",
+    });
+  }
 
-  // Errores detectados
-  const errores = rows.filter(
-    (r) =>
-      r["estatus_workflow"]?.toLowerCase().includes("error") ||
-      r["estatus_workflow"]?.toLowerCase().includes("rechazado") ||
-      r["estatus_workflow"]?.toLowerCase().includes("anulado")
-  );
-  kpis.push({
-    label: "Alertas",
-    value: errores.length.toString(),
-    detail: "errores / anulados / rechazos",
-    color: "red",
-  });
+  // ── KPI 3: Proveedores ──
+  if (provCol) {
+    const proveedores = new Set(
+      rows.map((r) => r[provCol]?.trim()).filter((v) => v && v !== "-")
+    );
+    kpis.push({
+      label: "Proveedores",
+      value: proveedores.size.toString(),
+      detail: "activos en el periodo",
+      color: "green",
+    });
+  } else {
+    // Contar valores únicos de la columna más relevante disponible
+    const uniqueCol = findColumn(headers, [
+      "nombre ur", "id_ur", "ur", "unidad responsable",
+    ]);
+    if (uniqueCol) {
+      const uniques = new Set(
+        rows.map((r) => r[uniqueCol]?.trim()).filter(Boolean)
+      );
+      kpis.push({
+        label: "Unidades",
+        value: uniques.size.toString(),
+        detail: `distintas en "${uniqueCol.substring(0, 25)}"`,
+        color: "green",
+      });
+    } else {
+      kpis.push({
+        label: "Columnas",
+        value: headers.length.toString(),
+        detail: "campos en el archivo",
+        color: "green",
+      });
+    }
+  }
+
+  // ── KPI 4: Alertas / Estatus ──
+  if (estatusCol) {
+    const vals = rows.map((r) => r[estatusCol]?.trim().toLowerCase()).filter(Boolean);
+    const errorKw = ["error", "rechazado", "anulado", "cancelado", "sin suficiencia"];
+    const alertas = vals.filter((v) =>
+      errorKw.some((kw) => v.includes(kw))
+    );
+    const distinctStatus = new Set(vals);
+    kpis.push({
+      label: "Alertas",
+      value: alertas.length.toString(),
+      detail:
+        alertas.length > 0
+          ? `problemas detectados`
+          : `${distinctStatus.size} estados distintos`,
+      color: alertas.length > 0 ? "red" : "green",
+    });
+  } else {
+    // Sin columna de estatus — mostrar columnas vacías como alerta
+    const emptyCounts = headers.map((h) => ({
+      header: h,
+      empties: rows.filter((r) => !r[h] || r[h].trim() === "" || r[h].trim() === "-").length,
+    }));
+    const problematic = emptyCounts.filter(
+      (c) => c.empties > 0 && c.empties < rows.length
+    );
+    kpis.push({
+      label: "Alertas",
+      value: problematic.length.toString(),
+      detail: "columnas con valores faltantes",
+      color: problematic.length > 0 ? "red" : "green",
+    });
+  }
 
   return kpis;
 }

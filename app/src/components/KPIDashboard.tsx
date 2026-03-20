@@ -65,28 +65,6 @@ function findColumn(
 }
 
 /**
- * Busca TODAS las columnas que coincidan con los patrones.
- */
-function findAllColumns(
-  headers: string[],
-  patterns: string[]
-): string[] {
-  const found: string[] = [];
-  const normedPatterns = patterns.map(norm);
-
-  for (const h of headers) {
-    const nh = norm(h);
-    for (const p of normedPatterns) {
-      if (nh === p || (p.length >= 4 && nh.includes(p)) || (nh.length >= 4 && p.includes(nh))) {
-        found.push(h);
-        break;
-      }
-    }
-  }
-  return found;
-}
-
-/**
  * Parsea un valor monetario
  */
 function parseMoney(raw: unknown): number {

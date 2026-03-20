@@ -3,10 +3,23 @@
 import { useCallback, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { parseCSVFile, parseXLSXFile, type ParsedData } from "@/lib/csv-parser";
+import {
+  buildBatchSourceLabel,
+  mergeParsedDataDetailed,
+  parseCSVFile,
+  parseXLSXFile,
+  type ParsedData,
+  type ParsedDataMergeAudit,
+  type ParsedFileBatchItem,
+} from "@/lib/csv-parser";
 
 interface FileUploaderProps {
-  onDataLoaded: (data: ParsedData, source: string) => void;
+  onDataLoaded: (
+    data: ParsedData,
+    source: string,
+    audit?: ParsedDataMergeAudit | null,
+    originalFiles?: ParsedFileBatchItem[]
+  ) => void;
 }
 
 export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
@@ -17,50 +30,69 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
   const [loadingFile, setLoadingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = useCallback(
-    async (file: File) => {
+  const parseLocalFile = useCallback(async (file: File) => {
+    const ext = file.name.split(".").pop()?.toLowerCase();
+
+    if (ext !== "csv" && ext !== "xlsx" && ext !== "xls") {
+      throw new Error(
+        `El archivo "${file.name}" no es válido. Solo se aceptan archivos CSV o Excel (.xlsx, .xls).`
+      );
+    }
+
+    const data =
+      ext === "xlsx" || ext === "xls"
+        ? await parseXLSXFile(file)
+        : await parseCSVFile(file);
+
+    if (data.rows.length === 0) {
+      throw new Error(`El archivo "${file.name}" está vacío.`);
+    }
+
+    return { source: file.name, data } satisfies ParsedFileBatchItem;
+  }, []);
+
+  const handleFiles = useCallback(
+    async (files: File[]) => {
       setError(null);
       setLoadingFile(true);
-      const ext = file.name.split(".").pop()?.toLowerCase();
-      if (ext !== "csv" && ext !== "xlsx" && ext !== "xls") {
-        setError("Solo se aceptan archivos CSV o Excel (.xlsx)");
-        setLoadingFile(false);
-        return;
-      }
+
       try {
-        let data: ParsedData;
-        if (ext === "xlsx" || ext === "xls") {
-          data = await parseXLSXFile(file);
-        } else {
-          data = await parseCSVFile(file);
-        }
-        if (data.rows.length === 0) {
-          setError("El archivo esta vacio");
+        if (files.length === 0) {
           setLoadingFile(false);
           return;
         }
-        onDataLoaded(data, file.name);
+
+        const parsedFiles = await Promise.all(
+          files.map((file) => parseLocalFile(file))
+        );
+        const { data: mergedData, audit } = mergeParsedDataDetailed(parsedFiles);
+        const sourceLabel = buildBatchSourceLabel(
+          parsedFiles.map((file) => file.source)
+        );
+
+        onDataLoaded(mergedData, sourceLabel, audit, parsedFiles);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Error al parsear el archivo"
         );
       } finally {
         setLoadingFile(false);
-        // Reset file input so same file can be re-uploaded
         if (fileInputRef.current) fileInputRef.current.value = "";
       }
     },
-    [onDataLoaded]
+    [onDataLoaded, parseLocalFile]
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (droppedFiles.length > 0) {
+        void handleFiles(droppedFiles);
+      }
     },
-    [handleFile]
+    [handleFiles]
   );
 
   const handleSheetsSubmit = async () => {
@@ -82,7 +114,7 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
         return;
       }
 
-      onDataLoaded(result, "Google Sheets");
+      onDataLoaded(result, "Google Sheets", null);
     } catch {
       setError("Error de conexion al cargar Google Sheet");
     } finally {
@@ -114,11 +146,14 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept=".csv,.xlsx,.xls"
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
+            const selectedFiles = Array.from(e.target.files || []);
+            if (selectedFiles.length > 0) {
+              void handleFiles(selectedFiles);
+            }
           }}
         />
 
@@ -141,7 +176,7 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
             {loadingFile ? (
               <>
                 <p className="text-base font-semibold text-primary">
-                  Procesando archivo...
+                  Procesando archivo(s)...
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   Esto puede tardar unos segundos
@@ -150,7 +185,7 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
             ) : (
               <>
                 <p className="text-base font-semibold text-foreground">
-                  Arrastra tu archivo CSV o Excel aqui
+                  Arrastra tus archivos CSV o Excel aqui
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   o <span className="text-primary font-medium">haz clic para seleccionar</span>
@@ -163,7 +198,7 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
               <path fillRule="evenodd" d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z" clipRule="evenodd" />
             </svg>
-            Archivos .csv o .xlsx con datos de facturacion
+            Archivos .csv, .xlsx o .xls con datos de facturacion
           </div>
 
           {/* Explicit button fallback for browsers that block programmatic click */}

@@ -11,11 +11,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ParsedData } from "@/lib/csv-parser";
+import type { ParsedData, ParsedFileBatchItem } from "@/lib/csv-parser";
+import {
+  downloadBlob,
+  downloadText,
+  exportToCSV,
+  exportToXLSX,
+} from "@/lib/exporter";
 
 interface DataPreviewProps {
   data: ParsedData;
   source: string;
+  originalSource?: string;
+  originalFiles?: ParsedFileBatchItem[];
+  isCorrected?: boolean;
   onClear: () => void;
 }
 
@@ -24,6 +33,9 @@ const PAGE_SIZES = [8, 25, 50, 100] as const;
 export default function DataPreview({
   data,
   source,
+  originalSource,
+  originalFiles = [],
+  isCorrected = false,
   onClear,
 }: DataPreviewProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -40,6 +52,45 @@ export default function DataPreview({
   const handlePageSizeChange = (size: number) => {
     setPageSize(size);
     setCurrentPage(0);
+  };
+
+  const correctedBaseName = useMemo(() => {
+    const cleanedSource = source.replace(/\s+\(corregido\)$/i, "");
+    const dotIndex = cleanedSource.lastIndexOf(".");
+    return dotIndex > 0 ? cleanedSource.slice(0, dotIndex) : cleanedSource;
+  }, [source]);
+
+  // Parse individual filenames from source label like "2 archivos: file1.csv, file2.csv"
+  const originalFileNames = useMemo(() => {
+    const src = originalSource || source;
+    const multiMatch = src.match(/^\d+ archivos: (.+)$/);
+    if (multiMatch) {
+      return multiMatch[1].split(", ").map((f) => f.trim());
+    }
+    return [src];
+  }, [originalSource, source]);
+
+  const isMultiFile = originalFileNames.length > 1;
+
+  const handleDownloadCorrectedCSV = () => {
+    const csv = exportToCSV(data);
+    downloadText(csv, `${correctedBaseName || "archivo"}_corregido.csv`);
+  };
+
+  const handleDownloadCorrectedXLSX = () => {
+    const blob = exportToXLSX(data, "Corregido");
+    downloadBlob(blob, `${correctedBaseName || "archivo"}_corregido.xlsx`);
+  };
+
+  const handleDownloadOriginalFile = (file: ParsedFileBatchItem) => {
+    const csv = exportToCSV(file.data);
+    const baseName = file.source.replace(/\.[^.]+$/, "");
+    downloadText(csv, `${baseName}_original.csv`);
+  };
+
+  const handleDownloadCombinedCSV = () => {
+    const csv = exportToCSV(data);
+    downloadText(csv, `datos_combinados.csv`);
   };
 
   return (
@@ -64,24 +115,81 @@ export default function DataPreview({
             </svg>
             <span className="text-sm font-medium">Datos cargados</span>
           </button>
-          <Badge variant="secondary" className="text-xs font-normal">
+          <Badge
+            variant="secondary"
+            className="text-xs font-normal max-w-[260px] truncate"
+            title={source}
+          >
             {source}
           </Badge>
+          {isCorrected && (
+            <Badge className="text-xs font-normal bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+              Corregido
+            </Badge>
+          )}
           <span className="text-xs text-muted-foreground">
             {data.totalRows} filas &middot; {data.headers.length} columnas
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClear}
-          className="text-xs text-muted-foreground hover:text-destructive h-7"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 mr-1">
-            <path fillRule="evenodd" d="M5 3.25V4H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 15h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11v-.75A2.25 2.25 0 0 0 8.75 1h-1.5A2.25 2.25 0 0 0 5 3.25Zm2.25-.75a.75.75 0 0 0-.75.75V4h3v-.75a.75.75 0 0 0-.75-.75h-1.5ZM6.05 6a.75.75 0 0 1 .787.713l.275 5.5a.75.75 0 0 1-1.498.075l-.275-5.5A.75.75 0 0 1 6.05 6Zm3.9 0a.75.75 0 0 1 .712.787l-.275 5.5a.75.75 0 0 1-1.498-.075l.275-5.5a.75.75 0 0 1 .786-.711Z" clipRule="evenodd" />
-          </svg>
-          Cambiar
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Original file download buttons */}
+          {isCorrected && isMultiFile && originalFiles.length > 0 && originalFiles.map((file) => (
+            <Button
+              key={file.source}
+              variant="outline"
+              size="sm"
+              onClick={() => handleDownloadOriginalFile(file)}
+              className="text-xs h-7 gap-1.5"
+              title={`Descargar ${file.source} (original)`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
+                <path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h4.879a1.5 1.5 0 0 1 1.06.44l2.122 2.12a1.5 1.5 0 0 1 .439 1.061V12.5A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5v-9Z" />
+              </svg>
+              <span className="max-w-[140px] truncate">{file.source}</span>
+            </Button>
+          ))}
+          {isCorrected && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadCorrectedCSV}
+                className="text-xs h-7"
+              >
+                Descargar CSV corregido
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadCorrectedXLSX}
+                className="text-xs h-7"
+              >
+                Descargar Excel corregido
+              </Button>
+            </>
+          )}
+          {!isCorrected && isMultiFile && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadCombinedCSV}
+              className="text-xs h-7"
+            >
+              Descargar datos combinados
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClear}
+            className="text-xs text-muted-foreground hover:text-destructive h-7"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 mr-1">
+              <path fillRule="evenodd" d="M5 3.25V4H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 15h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11v-.75A2.25 2.25 0 0 0 8.75 1h-1.5A2.25 2.25 0 0 0 5 3.25Zm2.25-.75a.75.75 0 0 0-.75.75V4h3v-.75a.75.75 0 0 0-.75-.75h-1.5ZM6.05 6a.75.75 0 0 1 .787.713l.275 5.5a.75.75 0 0 1-1.498.075l-.275-5.5A.75.75 0 0 1 6.05 6Zm3.9 0a.75.75 0 0 1 .712.787l-.275 5.5a.75.75 0 0 1-1.498-.075l.275-5.5a.75.75 0 0 1 .786-.711Z" clipRule="evenodd" />
+            </svg>
+            Cambiar
+          </Button>
+        </div>
       </div>
 
       {/* Expandable table */}

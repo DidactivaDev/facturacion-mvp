@@ -1,7 +1,15 @@
 import { NextRequest } from "next/server";
+import alasqlImport from "alasql";
 import { getOpenAIClient } from "@/lib/openai";
 import { type ParsedData } from "@/lib/csv-parser";
-const alasql = require("alasql") as {
+import type { QualityReport } from "@/lib/data-quality";
+import type { ColumnMapping } from "@/lib/column-mapper";
+import {
+  buildSafeNormalizationProposal,
+  shouldBuildSafeNormalizationProposal,
+} from "@/lib/normalization-proposal";
+
+const alasql = alasqlImport as unknown as {
   (sql: string, params?: unknown[]): unknown;
   tables: Record<string, { data: Record<string, unknown>[] }>;
 };
@@ -65,9 +73,45 @@ const QUALITY_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+// Track current headers for column name auto-correction
+let currentHeaders: string[] = [];
+
 // ─── SQL Execution in Server ─────────────────────────────
 
+/** Convert a column name to a safe SQL identifier */
+function sanitizeColumnName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/[()]/g, "")           // remove parentheses
+    .replace(/[^a-zA-Z0-9]+/g, "_") // non-alphanumeric → underscore
+    .replace(/^_+|_+$/g, "")        // trim underscores
+    .toLowerCase()
+    .substring(0, 60);               // keep reasonable length
+}
+
+/** Mapping from sanitized column name → original column name */
+let columnNameMap: Record<string, string> = {};
+
 function loadDataForSQL(data: ParsedData): void {
+  currentHeaders = data.headers;
+
+  // Build sanitized name mapping
+  const sanitized: Record<string, string> = {};
+  const usedNames = new Set<string>();
+  for (const h of data.headers) {
+    let sName = sanitizeColumnName(h);
+    // Handle duplicates by appending a number
+    if (usedNames.has(sName)) {
+      let i = 2;
+      while (usedNames.has(`${sName}_${i}`)) i++;
+      sName = `${sName}_${i}`;
+    }
+    usedNames.add(sName);
+    sanitized[h] = sName;
+  }
+  columnNameMap = sanitized;
+
   try {
     alasql("DROP TABLE IF EXISTS datos");
   } catch {
@@ -79,28 +123,103 @@ function loadDataForSQL(data: ParsedData): void {
     alasql.tables["datos"].data = data.rows.map((row) => {
       const clean: Record<string, string | number | boolean> = {};
       for (const key of data.headers) {
+        const sKey = sanitized[key];
         const rawVal = row[key];
 
         // Handle various types that might come through
         if (rawVal === undefined || rawVal === null) {
-          clean[key] = "";
+          clean[sKey] = "";
           continue;
         }
 
         // Convert to string first to normalize
         const val = String(rawVal).trim();
 
-        // Try to parse as number
+        // Try to parse as plain number first
         const num = parseFloat(val);
         if (val !== "" && !isNaN(num) && isFinite(num)) {
-          clean[key] = num;
+          clean[sKey] = num;
+        } else if (val.includes("$") || val.match(/^[\d,$.\-\s]+$/)) {
+          // Try to parse as monetary value: strip $, spaces, commas
+          const stripped = val.replace(/[$\s,]/g, "");
+          if (!stripped || stripped === "-" || stripped === "--") {
+            clean[sKey] = 0; // "$ -", "$-", "$0" → 0
+          } else {
+            const moneyNum = parseFloat(stripped);
+            clean[sKey] = !isNaN(moneyNum) && isFinite(moneyNum) ? moneyNum : val;
+          }
         } else {
-          clean[key] = val;
+          clean[sKey] = val;
         }
       }
       return clean;
     });
   }
+}
+
+/**
+ * Simple similarity score between two strings (0-1).
+ * Uses normalized case-insensitive comparison and longest common substring ratio.
+ */
+function stringSimilarity(a: string, b: string): number {
+  const na = a.toLowerCase().trim();
+  const nb = b.toLowerCase().trim();
+  if (na === nb) return 1;
+  if (na.length === 0 || nb.length === 0) return 0;
+
+  // Character overlap ratio
+  let matches = 0;
+  const shorter = na.length <= nb.length ? na : nb;
+  const longer = na.length > nb.length ? na : nb;
+  for (let i = 0; i < shorter.length; i++) {
+    if (shorter[i] === longer[i]) matches++;
+  }
+  const positionalScore = matches / longer.length;
+
+  // Check if one contains the other
+  if (longer.includes(shorter) || shorter.includes(longer)) {
+    return 0.85 + positionalScore * 0.15;
+  }
+
+  return positionalScore;
+}
+
+/**
+ * Auto-correct column names in SQL queries by matching [bracketed names]
+ * against actual table headers. Fixes GPT-4o mini typos.
+ */
+function autoFixColumnNames(query: string): string {
+  if (currentHeaders.length === 0) return query;
+
+  // Find all [column_name] references
+  return query.replace(/\[([^\]]+)\]/g, (_match, colName: string) => {
+    // Check exact match first
+    if (currentHeaders.includes(colName)) return `[${colName}]`;
+
+    // Case-insensitive exact match
+    const exactCI = currentHeaders.find(
+      (h) => h.toLowerCase() === colName.toLowerCase()
+    );
+    if (exactCI) return `[${exactCI}]`;
+
+    // Fuzzy match — find best match above threshold
+    let bestMatch = "";
+    let bestScore = 0;
+    for (const header of currentHeaders) {
+      const score = stringSimilarity(colName, header);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = header;
+      }
+    }
+
+    if (bestScore >= 0.75 && bestMatch) {
+      console.log(`[SQL AutoFix] "${colName}" → "${bestMatch}" (score: ${bestScore.toFixed(2)})`);
+      return `[${bestMatch}]`;
+    }
+
+    return `[${colName}]`;
+  });
 }
 
 function runSQL(query: string): string {
@@ -110,7 +229,13 @@ function runSQL(query: string): string {
   }
 
   try {
-    const results = alasql(query) as Record<string, unknown>[];
+    const fixedQuery = autoFixColumnNames(query);
+    console.log(`[SQL] Query: ${fixedQuery}${fixedQuery !== query ? " (auto-fixed)" : ""}`);
+    const results = alasql(fixedQuery) as Record<string, unknown>[];
+    console.log(`[SQL] Results: ${results?.length ?? 0} rows`);
+    if (results?.length > 0) {
+      console.log(`[SQL] First row sample:`, JSON.stringify(results[0]).substring(0, 300));
+    }
     if (!results || results.length === 0) {
       return "La consulta no retornó resultados.";
     }
@@ -246,38 +371,243 @@ function runQualityAnalysis(
 
 // ─── System Prompt ──────────────────────────────────────
 
-function buildSystemPrompt(data: ParsedData): string {
+function buildQualityContext(report?: QualityReport): string {
+  if (!report) {
+    return "No hay un reporte de calidad precalculado para este dataset.";
+  }
+
+  const alertLines =
+    report.alerts.length > 0
+      ? report.alerts
+          .map((alert, index) => {
+            const affectedRows =
+              alert.affectedRows !== undefined
+                ? ` · filas afectadas: ${alert.affectedRows}`
+                : "";
+            return `${index + 1}. [${alert.severity.toUpperCase()}] ${alert.title} — ${alert.description}${affectedRows}. Recomendación: ${alert.recommendation}`;
+          })
+          .join("\n")
+      : "No se detectaron alertas de calidad.";
+
+  return `REPORTE DE CALIDAD ACTUAL:
+- Fuente: ${report.source}
+- Filas analizadas: ${report.totalRows}
+- Columnas: ${report.totalColumns}
+- Alertas altas: ${report.summary.highAlerts}
+- Alertas medias: ${report.summary.mediumAlerts}
+- Alertas bajas: ${report.summary.lowAlerts}
+- Total de alertas: ${report.summary.totalAlerts}
+
+DETALLE DE ALERTAS:
+${alertLines}`;
+}
+
+// ─── Column hints for AI ────────────────────────────────
+
+function normHeader(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\-()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findHeaderByPatterns(
+  headers: string[],
+  patterns: string[]
+): string | null {
+  const normed = patterns.map(normHeader);
+  for (const h of headers) {
+    const nh = normHeader(h);
+    for (const p of normed) {
+      if (nh === p) return h;
+    }
+  }
+  for (const h of headers) {
+    const nh = normHeader(h);
+    for (const p of normed) {
+      if (p.length >= 4 && nh.includes(p)) return h;
+    }
+  }
+  return null;
+}
+
+function buildColumnHints(headers: string[]): string {
+  const hints: string[] = [];
+
+  const montoCol = findHeaderByPatterns(headers, [
+    "monto o importe especifico", "importe especifico", "monto factura",
+    "monto pendiente", "importe", "monto", "total",
+  ]);
+  const provCol = findHeaderByPatterns(headers, [
+    "proveedor", "nombre proveedor", "razon social",
+    "indique el proveedor", "si cuenta con factura indique el proveedor",
+  ]);
+  const pagadoCol = findHeaderByPatterns(headers, [
+    "esta_pagado", "pagado", "estatus pago",
+    "importe pagado", "importe pagado del contrato", "monto pagado",
+  ]);
+
+  // Use sanitized names for SQL hints
+  const sMontoCol = montoCol ? columnNameMap[montoCol] : null;
+  const sProvCol = provCol ? columnNameMap[provCol] : null;
+  const sPagadoCol = pagadoCol ? columnNameMap[pagadoCol] : null;
+
+  if (sMontoCol) hints.push(`- Columna de MONTO PRINCIPAL: ${sMontoCol}. Valores numéricos. Puedes sumar directamente con SUM(${sMontoCol}).`);
+  if (sProvCol) hints.push(`- Columna de PROVEEDOR: ${sProvCol}. Para contar proveedores usa COUNT(DISTINCT ${sProvCol}) excluyendo vacíos y "-".`);
+  if (sPagadoCol) hints.push(`- Columna de PAGO: ${sPagadoCol}. Valores numéricos. Un registro SIN PAGO tiene valor = 0. Usa: WHERE ${sPagadoCol} = 0`);
+
+  if (hints.length === 0) return "";
+
+  return `INTERPRETACIÓN DE COLUMNAS CLAVE:\n${hints.join("\n")}`;
+}
+
+function buildSystemPrompt(
+  data: ParsedData,
+  options?: {
+    source?: string;
+    qualityReport?: QualityReport;
+    autoPrompt?: boolean;
+  }
+): string {
+  // Use cleaned alasql data for samples so the AI sees actual stored values (numeric, not "$1,234")
+  const sqlData = alasql.tables["datos"]?.data as Record<string, unknown>[] | undefined;
+  const sampleRows = sqlData?.slice(0, 20) ?? [];
+
   const schema = data.headers
     .map((h) => {
-      const sample = data.rows.slice(0, 20);
-      const nums = sample.filter(
-        (r) => r[h] !== "" && !isNaN(parseFloat(r[h]))
+      const sName = columnNameMap[h] || h;
+      const nums = sampleRows.filter(
+        (r) => r[sName] !== "" && typeof r[sName] === "number"
       ).length;
-      const type = nums > sample.length * 0.7 ? "NUMBER" : "TEXT";
-      const examples = [...new Set(data.rows.slice(0, 5).map((r) => r[h]).filter(Boolean))].slice(0, 3);
-      return `  - ${h} (${type}) ej: ${examples.join(", ")}`;
+      const type = nums > sampleRows.length * 0.7 ? "NUMBER" : "TEXT";
+      const examples = [...new Set(
+        (sqlData?.slice(0, 5) ?? []).map((r) => String(r[sName] ?? "")).filter(Boolean)
+      )].slice(0, 3);
+      return `  - ${sName} (${type}) ej: ${examples.join(", ")}`;
     })
     .join("\n");
+
+  const qualityContext = buildQualityContext(options?.qualityReport);
+  const sourceLine = options?.source ? `Fuente actual: ${options.source}` : "";
+  const columnHints = buildColumnHints(data.headers);
+  const autoPromptSection = options?.autoPrompt
+    ? `
+MODO DE ARRANQUE AUTOMÁTICO:
+- Esta es la primera respuesta después de cargar un archivo con alertas.
+- La interfaz mostrará las alertas en tarjetas visuales, así que NO enumeres todas una por una.
+- Resume en lenguaje simple qué está pasando con el archivo.
+- Di qué conviene corregir primero en 2 a 4 puntos cortos.
+- Explica qué tipos de corrección puedes aplicar en este dataset.
+- NO generes bloques data-edit todavía.
+- Termina con una pregunta clara sobre si el usuario desea que normalices o corrijas los datos.`
+    : "";
 
   return `Eres un asistente experto en análisis de datos tabulares, especialmente datos de facturación y presupuesto gubernamental en México.
 
 DATOS DISPONIBLES:
 Tabla: datos (${data.totalRows} filas, ${data.headers.length} columnas)
+${sourceLine}
 ${schema}
+
+${columnHints}
+
+${qualityContext}
 
 HERRAMIENTAS:
 Tienes acceso a dos herramientas:
 1. **execute_sql**: Ejecuta consultas SQL SELECT sobre la tabla "datos". SIEMPRE usa esta herramienta para cálculos, conteos, sumas, filtrados, agrupaciones. No calcules de memoria.
 2. **analyze_quality**: Ejecuta análisis de calidad de datos (nulos, duplicados, stats, outliers).
 
-REGLAS IMPORTANTES:
+SINTAXIS SQL:
+- Los nombres de columna en la tabla ya están normalizados a formato snake_case sin espacios ni caracteres especiales.
+- Usa los nombres de columna directamente SIN corchetes ni comillas: SELECT monto_o_importe_especifico FROM datos
+- Para strings literales usa comillas simples: WHERE columna = 'valor'
+
+REGLA CRÍTICA DE HERRAMIENTAS:
+- NUNCA respondas una pregunta sobre cantidades, conteos, sumas, montos, totales, cuántos, cuáles o cualquier dato numérico SIN ANTES llamar a execute_sql. Si no llamas execute_sql, TU RESPUESTA SERÁ INCORRECTA.
+- SIEMPRE ejecuta una consulta SQL antes de dar cualquier número o conteo. Sin excepción.
+- NO adivines ni calcules de memoria. Los datos están en la tabla "datos" y SOLO puedes consultarlos con execute_sql.
+
+REGLAS GENERALES:
 - Responde siempre en español
-- SIEMPRE usa execute_sql para cualquier pregunta que requiera cálculos o filtrados. No inventes números.
+- Usa un tono claro, tranquilo y útil para personas no técnicas.
+- Evita jerga técnica innecesaria. Si usas un término técnico, explícalo en la misma frase.
+- Empieza con una conclusión corta para que la persona entienda rápido qué pasa.
+- Cuando corresponda, cierra con el siguiente paso recomendado o una pregunta clara.
 - Puedes ejecutar múltiples queries si es necesario (una a la vez).
-- Cuando muestres datos, usa tablas markdown
+- Cuando muestres datos, prefiere tablas markdown para conteos, comparaciones, topes y ejemplos.
 - Usa formato de moneda mexicana ($ con comas) para montos
 - Si detectas errores o inconsistencias, menciónalos
-- Sé preciso y muestra el razonamiento
+- Sé preciso, pero no abrumes con texto largo
+- Prefiere párrafos cortos y listas breves
+- No repitas información que ya esté claramente resumida en la interfaz
+
+EDICIÓN DE DATOS:
+- Cuando el usuario pida corregir, limpiar, normalizar, convertir, estandarizar o aplicar cambios, responde con una explicación breve y después genera uno o más bloques \`\`\`data-edit\`\`\` con JSON válido.
+- Solo están permitidas estas operaciones: update_cells, delete_rows, fill_empty, replace_values, normalize_column, delete_duplicates.
+- NO uses add_column ni inventes operaciones nuevas.
+- Usa nombres de columna EXACTOS del dataset.
+- Los números de fila son 1-based.
+- Si la petición es ambigua o riesgosa, primero pide confirmación en lenguaje natural y no generes data-edit.
+- Sé conservador con eliminaciones de filas: solo propón delete_rows o delete_duplicates cuando haya un criterio claro.
+
+FORMATOS data-edit SOPORTADOS:
+\`\`\`data-edit
+{
+  "type": "update_cells",
+  "description": "Corregir proveedor en filas específicas",
+  "updates": [
+    { "row": 5, "column": "proveedor", "value": "Proveedor corregido" }
+  ]
+}
+\`\`\`
+
+\`\`\`data-edit
+{
+  "type": "delete_rows",
+  "description": "Eliminar filas inválidas",
+  "rowIndices": [8, 14]
+}
+\`\`\`
+
+\`\`\`data-edit
+{
+  "type": "fill_empty",
+  "description": "Llenar vacíos con un valor controlado",
+  "columns": ["estatus_workflow"],
+  "fillValue": "Pendiente de validación"
+}
+\`\`\`
+
+\`\`\`data-edit
+{
+  "type": "replace_values",
+  "description": "Estandarizar catálogo de valores",
+  "columns": ["prioridad"],
+  "replaceMap": { "alta": "Alta", "ALTA": "Alta" }
+}
+\`\`\`
+
+\`\`\`data-edit
+{
+  "type": "normalize_column",
+  "description": "Normalizar nombres",
+  "columns": ["nombre_ur"],
+  "normalizeType": "uppercase"
+}
+\`\`\`
+
+\`\`\`data-edit
+{
+  "type": "delete_duplicates",
+  "description": "Eliminar duplicados confirmados",
+  "duplicateKeys": ["id_ur", "id_partida_especifica"]
+}
+\`\`\`
 
 GRÁFICAS:
 Cuando el usuario pida una gráfica o cuando ayude a entender mejor los datos, genera un bloque:
@@ -294,24 +624,75 @@ Cuando el usuario pida una gráfica o cuando ayude a entender mejor los datos, g
 \`\`\`
 
 Tipos: "bar", "pie", "line". Para múltiples series usa "keys": ["serie1", "serie2"].
-Los valores deben ser NUMÉRICOS. Usa nombres cortos. Máximo 15-20 items.`;
+Los valores deben ser NUMÉRICOS. Usa nombres cortos. Máximo 15-20 items.
+${autoPromptSection}`;
+}
+
+function createPlainTextResponse(content: string): Response {
+  const encoder = new TextEncoder();
+  const readable = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(content));
+      controller.close();
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache",
+    },
+  });
 }
 
 // ─── API Route ──────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   try {
-    const { question, data, history } = (await request.json()) as {
-      question: string;
+    const {
+      question,
+      data,
+      history,
+      source,
+      mappings,
+      qualityReport,
+      autoPrompt,
+    } = (await request.json()) as {
+      question?: string;
       data: ParsedData;
       history?: { role: "user" | "assistant"; content: string }[];
+      source?: string;
+      mappings?: ColumnMapping[];
+      qualityReport?: QualityReport;
+      autoPrompt?: boolean;
     };
 
-    if (!question || !data) {
+    const effectiveQuestion =
+      (question || "").trim() ||
+      (autoPrompt
+        ? "Resume las alertas del archivo, explica qué correcciones puedes aplicar y pregunta si deseas que normalice los datos."
+        : "");
+
+    if (!effectiveQuestion || !data) {
       return new Response(
         JSON.stringify({ error: "Se requiere una pregunta y datos" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
+    }
+
+    if (
+      shouldBuildSafeNormalizationProposal({
+        question: effectiveQuestion,
+        history,
+      })
+    ) {
+      const proposal = buildSafeNormalizationProposal({
+        data,
+        qualityReport,
+        mappings,
+      });
+
+      return createPlainTextResponse(proposal.message);
     }
 
     // Cargar datos en SQL
@@ -324,7 +705,11 @@ export async function POST(request: NextRequest) {
       console.log(`[Chat API] Sample row esta_facturado="${sample["esta_facturado"]}" (type: ${typeof sample["esta_facturado"]}), esta_pagado="${sample["esta_pagado"]}" (type: ${typeof sample["esta_pagado"]})`);
     }
 
-    const systemPrompt = buildSystemPrompt(data);
+    const systemPrompt = buildSystemPrompt(data, {
+      source,
+      qualityReport,
+      autoPrompt,
+    });
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt },
@@ -338,7 +723,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    messages.push({ role: "user", content: question });
+    messages.push({ role: "user", content: effectiveQuestion });
 
     const openai = getOpenAIClient();
 
@@ -409,24 +794,12 @@ export async function POST(request: NextRequest) {
 
       // No tool calls — this is the final response.
       if (choice.finish_reason === "stop" || !message.tool_calls) {
-        console.log(`[Chat API] Round ${round}: Final response (no tool calls). finish_reason=${choice.finish_reason}`);
+        console.log(`[Chat API] Round ${round}: Final response (no tool calls). finish_reason=${choice.finish_reason}. Content preview: ${(message.content || "").substring(0, 200)}`);
+        console.log(`[Chat API] Total messages in context: ${messages.length}. Tool calls made: ${round > 0 ? 'yes' : 'no'}`);
         const fullContent = message.content || "";
 
         // Stream the already-obtained response directly
-        const encoder = new TextEncoder();
-        const readable = new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(fullContent));
-            controller.close();
-          },
-        });
-
-        return new Response(readable, {
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-cache",
-          },
-        });
+        return createPlainTextResponse(fullContent);
       }
     }
 

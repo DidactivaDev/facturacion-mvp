@@ -8,11 +8,11 @@ import KPIDashboard from "@/components/KPIDashboard";
 import QualityReportView from "@/components/QualityReport";
 import ColumnMapperView from "@/components/ColumnMapper";
 import StandardExporter from "@/components/StandardExporter";
-import type { ParsedData } from "@/lib/csv-parser";
+import type { ParsedData, ParsedDataMergeAudit, ParsedFileBatchItem } from "@/lib/csv-parser";
 import { autoMapColumns, type ColumnMapping } from "@/lib/column-mapper";
 import { analyzeQuality, type QualityReport } from "@/lib/data-quality";
-
 type Tab = "data" | "quality" | "standard" | "chat";
+
 
 export default function Home() {
   const [data, setData] = useState<ParsedData | null>(null);
@@ -20,30 +20,69 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("quality");
   const [mappings, setMappings] = useState<ColumnMapping[]>([]);
   const [report, setReport] = useState<QualityReport | null>(null);
+  const [isCorrected, setIsCorrected] = useState(false);
+  const [chatSessionKey, setChatSessionKey] = useState(0);
+  const [, setMergeAudit] = useState<ParsedDataMergeAudit | null>(null);
+  const [originalSource, setOriginalSource] = useState<string>("");
+  const [originalFiles, setOriginalFiles] = useState<ParsedFileBatchItem[]>([]);
 
-  const handleDataLoaded = useCallback((parsed: ParsedData, src: string) => {
+  const handleDataLoaded = useCallback((
+    parsed: ParsedData,
+    src: string,
+    audit?: ParsedDataMergeAudit | null,
+    files?: ParsedFileBatchItem[]
+  ) => {
     setData(parsed);
     setSource(src);
+    setOriginalSource(src);
+    setIsCorrected(false);
+    setChatSessionKey((prev) => prev + 1);
+    setMergeAudit(audit ?? null);
+    setOriginalFiles(files ?? []);
 
-    // Auto-mapeo
     const autoMappings = autoMapColumns(parsed.headers);
     setMappings(autoMappings);
 
-    // Análisis de calidad
     const qualityReport = analyzeQuality(parsed, autoMappings, src);
     setReport(qualityReport);
 
-    // Si hay alertas altas, mostrar calidad primero; si no, mostrar datos
-    setActiveTab(qualityReport.summary.highAlerts > 0 ? "quality" : "data");
+    setActiveTab(
+      qualityReport.summary.totalAlerts > 0 ? "chat" : "data"
+    );
   }, []);
 
   const handleClear = useCallback(() => {
     setData(null);
     setSource("");
+    setOriginalSource("");
+    setOriginalFiles([]);
     setMappings([]);
     setReport(null);
+    setIsCorrected(false);
+    setMergeAudit(null);
     setActiveTab("quality");
   }, []);
+
+  const handleEditsApplied = useCallback(
+    (nextData: ParsedData, nextSource: string) => {
+      const nextMappings = mappings.every(
+        (mapping) =>
+          mapping.sourceColumn === null ||
+          nextData.headers.includes(mapping.sourceColumn)
+      )
+        ? mappings
+        : autoMapColumns(nextData.headers);
+      const nextReport = analyzeQuality(nextData, nextMappings, nextSource);
+
+      setData(nextData);
+      setSource(nextSource);
+      setMappings(nextMappings);
+      setReport(nextReport);
+      setIsCorrected(true);
+      setActiveTab("chat");
+    },
+    [mappings]
+  );
 
   const handleMappingsChange = useCallback(
     (newMappings: ColumnMapping[]) => {
@@ -67,8 +106,8 @@ export default function Home() {
           ? report.summary.highAlerts > 0
             ? `${report.summary.highAlerts}`
             : report.summary.totalAlerts > 0
-            ? `${report.summary.totalAlerts}`
-            : "✓"
+              ? `${report.summary.totalAlerts}`
+              : "✓"
           : undefined,
       },
       {
@@ -106,7 +145,10 @@ export default function Home() {
           {data && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              {data.totalRows} registros · {source}
+              <span>{data.totalRows} registros ·</span>
+              <span className="max-w-[320px] truncate" title={source}>
+                {source}
+              </span>
             </div>
           )}
         </div>
@@ -142,25 +184,23 @@ export default function Home() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`relative px-4 py-2.5 text-sm font-medium transition-colors rounded-t-lg ${
-                      activeTab === tab.id
-                        ? "text-primary bg-card border border-b-0 border-border -mb-px"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                    }`}
+                    className={`relative px-4 py-2.5 text-sm font-medium transition-colors rounded-t-lg ${activeTab === tab.id
+                      ? "text-primary bg-card border border-b-0 border-border -mb-px"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      }`}
                   >
                     <span className="flex items-center gap-2">
                       {tab.label}
                       {tab.badge && (
                         <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                            activeTab === tab.id
-                              ? "bg-primary/10 text-primary"
-                              : tab.id === "quality" &&
-                                report &&
-                                report.summary.highAlerts > 0
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${activeTab === tab.id
+                            ? "bg-primary/10 text-primary"
+                            : tab.id === "quality" &&
+                              report &&
+                              report.summary.highAlerts > 0
                               ? "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400"
                               : "bg-muted text-muted-foreground"
-                          }`}
+                            }`}
                         >
                           {tab.badge}
                         </span>
@@ -177,6 +217,9 @@ export default function Home() {
                 <DataPreview
                   data={data}
                   source={source}
+                  originalSource={originalSource}
+                  originalFiles={originalFiles}
+                  isCorrected={isCorrected}
                   onClear={handleClear}
                 />
               )}
@@ -212,7 +255,19 @@ export default function Home() {
                 </div>
               )}
 
-              {activeTab === "chat" && <ChatInterface data={data} />}
+              {report && (
+                <div className={activeTab === "chat" ? "block" : "hidden"}>
+                  <ChatInterface
+                    key={chatSessionKey}
+                    data={data}
+                    report={report}
+                    source={source}
+                    mappings={mappings}
+                    autoPrompt={report.summary.totalAlerts > 0}
+                    onApplyEdits={handleEditsApplied}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}

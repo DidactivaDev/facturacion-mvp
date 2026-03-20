@@ -14,6 +14,8 @@ import {
   buildDataEditProposal,
   type DataEditOperation,
 } from "@/lib/data-operations";
+import { readApiErrorMessage } from "@/lib/api-response";
+import { prepareChatRequestBody } from "@/lib/chat-request-body";
 
 type ChatMessageKind = "default" | "auto-analysis";
 
@@ -204,23 +206,23 @@ export default function ChatInterface({
       setMessages((prev) => [...prev, assistantMessage]);
 
       try {
+        const { body, headers } = await prepareChatRequestBody({
+          question: effectiveQuestion,
+          data,
+          source,
+          mappings,
+          qualityReport: report,
+          history: historyForRequest,
+          autoPrompt: autoPromptRequest,
+        });
         const res = await fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question: effectiveQuestion,
-            data,
-            source,
-            mappings,
-            qualityReport: report,
-            history: historyForRequest,
-            autoPrompt: autoPromptRequest,
-          }),
+          headers,
+          body,
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Error del servidor");
+          throw new Error(await readApiErrorMessage(res));
         }
 
         const reader = res.body?.getReader();

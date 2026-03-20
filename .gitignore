@@ -1,5 +1,25 @@
+# Dependencies
 node_modules/
+
+# Next.js / export estático
 .next/
+out/
+
+# Variables de entorno (plantilla versionada: app/.env.example)
 .env*
+!app/.env.example
+
+# Sistema operativo
 .DS_Store
+Thumbs.db
+
+# TypeScript
 *.tsbuildinfo
+
+# Logs y cobertura
+*.log
+logs/
+coverage/
+
+# PM2: overrides locales con secretos o rutas de máquina
+ecosystem.config.local.cjs

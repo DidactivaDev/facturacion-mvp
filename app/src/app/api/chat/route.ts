@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { parseJsonBodyWithOptionalGzip } from "@/lib/parse-json-request";
 import alasqlImport from "alasql";
 import { getOpenAIClient } from "@/lib/openai";
 import { type ParsedData } from "@/lib/csv-parser";
@@ -657,7 +658,7 @@ export async function POST(request: NextRequest) {
       mappings,
       qualityReport,
       autoPrompt,
-    } = (await request.json()) as {
+    } = (await parseJsonBodyWithOptionalGzip(request)) as {
       question?: string;
       data: ParsedData;
       history?: { role: "user" | "assistant"; content: string }[];

@@ -107,14 +107,29 @@ export default function FileUploader({ onDataLoaded }: FileUploaderProps) {
         body: JSON.stringify({ url: sheetsUrl }),
       });
 
-      const result = await res.json();
-
-      if (!res.ok) {
-        setError(result.error || "Error al cargar Google Sheet");
+      const text = await res.text();
+      let result: unknown;
+      try {
+        result = JSON.parse(text);
+      } catch {
+        setError(
+          text.trimStart().startsWith("<")
+            ? `Error al cargar la hoja (HTTP ${res.status}). El servidor devolvió HTML en lugar de JSON.`
+            : "Respuesta inválida del servidor."
+        );
         return;
       }
 
-      onDataLoaded(result, "Google Sheets", null);
+      if (!res.ok) {
+        const err =
+          result && typeof result === "object" && "error" in result
+            ? String((result as { error: unknown }).error)
+            : null;
+        setError(err || "Error al cargar Google Sheet");
+        return;
+      }
+
+      onDataLoaded(result as ParsedData, "Google Sheets", null);
     } catch {
       setError("Error de conexion al cargar Google Sheet");
     } finally {

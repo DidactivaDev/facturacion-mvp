@@ -2,17 +2,17 @@
  * Column Mapper — Auto-mapeo de columnas fuente al estándar CCINSHAE
  *
  * Estrategia de matching (en orden de prioridad):
- * 1. Match exacto (case-insensitive, trimmed)
- * 2. Match por aliases definidos en el schema
- * 3. Match por similitud normalizada (sin acentos, sin _, sin espacios)
- * 4. Sin mapeo → queda vacío
+ * 1. Match exacto del nombre oficial
+ * 2. Match por aliases definidos en el estándar
+ * 3. Match por aliases de columnas extra conocidas para merge multiarchivo
+ * 4. Match fuzzy solo si es único y suficientemente claro
+ * 5. Sin mapeo → queda vacío / se preserva como extra
  */
 
-import {
-  STANDARD_FIELDS,
-  type StandardField,
-} from "./standard-schema";
+import { STANDARD_FIELDS, type StandardField } from "./standard-schema";
 import type { ParsedData } from "./csv-parser";
+
+export type ColumnMatchMethod = "exact" | "alias" | "fuzzy" | "none";
 
 export interface ColumnMapping {
   /** Nombre de la columna en el estándar */
@@ -20,26 +20,135 @@ export interface ColumnMapping {
   /** Nombre de la columna en el archivo fuente (null = sin mapeo) */
   sourceColumn: string | null;
   /** Método usado para hacer el match */
-  matchMethod: "exact" | "alias" | "fuzzy" | "none";
+  matchMethod: ColumnMatchMethod;
   /** Confianza del match 0-1 */
   confidence: number;
   /** Si el campo es obligatorio en el estándar */
   required: boolean;
 }
 
+export interface SemanticExtraField {
+  canonicalName: string;
+  aliases: string[];
+}
+
+export interface HeaderCandidate {
+  canonicalName: string;
+  kind: "standard" | "extra";
+  standardField: string | null;
+  matchMethod: ColumnMatchMethod;
+  confidence: number;
+}
+
+export interface HeaderResolution {
+  sourceHeader: string;
+  normalizedHeader: string;
+  canonicalName: string;
+  kind: "standard" | "extra";
+  standardField: string | null;
+  matchMethod: ColumnMatchMethod;
+  confidence: number;
+}
+
+export interface HeaderAnalysis {
+  resolutions: HeaderResolution[];
+  warnings: string[];
+  errors: string[];
+}
+
+const FUZZY_MATCH_THRESHOLD = 0.82;
+const FUZZY_MATCH_DELTA = 0.06;
+
+export const SEMANTIC_EXTRA_FIELDS: SemanticExtraField[] = [
+  {
+    canonicalName: "numero_factura",
+    aliases: [
+      "numero_factura",
+      "numero factura",
+      "número de factura",
+      "si cuenta con factura indique el numero de factura",
+      "si cuenta con factura indique el número de factura",
+    ],
+  },
+  {
+    canonicalName: "mes_calendario",
+    aliases: [
+      "mes_calendario",
+      "mes calendario",
+      "mes calendario en que requiere el recurso",
+      "mes en que requiere el recurso",
+    ],
+  },
+  {
+    canonicalName: "justificacion",
+    aliases: ["justificacion", "justificación"],
+  },
+  {
+    canonicalName: "observacion",
+    aliases: ["observacion", "observación", "observaciones"],
+  },
+  {
+    canonicalName: "monto_factura",
+    aliases: [
+      "monto_factura",
+      "monto factura",
+      "importe_factura",
+      "importe factura",
+    ],
+  },
+  {
+    canonicalName: "esta_facturado",
+    aliases: ["esta_facturado", "esta facturado", "facturado"],
+  },
+  {
+    canonicalName: "esta_pagado",
+    aliases: ["esta_pagado", "esta pagado", "pagado"],
+  },
+  {
+    canonicalName: "clave_presupuestal",
+    aliases: ["clave_presupuestal", "clave presupuestal"],
+  },
+  {
+    canonicalName: "area_contratante",
+    aliases: ["area_contratante", "área contratante", "area contratante"],
+  },
+  {
+    canonicalName: "area_financiera",
+    aliases: ["area_financiera", "área financiera", "area financiera"],
+  },
+  {
+    canonicalName: "estatus_workflow",
+    aliases: ["estatus_workflow", "estatus workflow"],
+  },
+];
+
+interface StandardCandidateScore {
+  field: StandardField;
+  score: number;
+}
+
 /**
- * Normaliza un string para comparación:
- * lowercase, sin acentos, sin _, sin guiones, sin espacios extra
+ * Normaliza un header para comparación robusta:
+ * lowercase, sin acentos, sin paréntesis decorativos, sin saltos de línea,
+ * sin caracteres especiales y con espacios colapsados.
  */
-function normalize(s: string): string {
-  return s
+export function normalizeColumnName(value: string): string {
+  return value
     .toLowerCase()
     .trim()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quita acentos
-    .replace(/[_\-]/g, " ") // guiones y underscores a espacios
-    .replace(/\s+/g, " ") // espacios múltiples a uno
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/[_\-\/]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+export function buildExtraColumnKey(value: string): string {
+  const normalized = normalizeColumnName(value);
+  return normalized.replace(/\s+/g, "_").replace(/^_+|_+$/g, "") || "columna_extra";
 }
 
 /**
@@ -78,99 +187,221 @@ function similarity(a: string, b: string): number {
   return 1 - levenshtein(a, b) / maxLen;
 }
 
+function getStandardScores(normalizedHeader: string): StandardCandidateScore[] {
+  return STANDARD_FIELDS.map((field) => {
+    const normalizedFieldName = normalizeColumnName(field.name);
+    const aliasScores = field.aliases.map((alias) =>
+      similarity(normalizedHeader, normalizeColumnName(alias))
+    );
+    const score = Math.max(
+      similarity(normalizedHeader, normalizedFieldName),
+      ...aliasScores
+    );
+
+    return { field, score };
+  }).sort((a, b) => b.score - a.score);
+}
+
+function findExtraFieldMatch(normalizedHeader: string): SemanticExtraField | null {
+  for (const field of SEMANTIC_EXTRA_FIELDS) {
+    const options = [field.canonicalName, ...field.aliases].map(
+      normalizeColumnName
+    );
+
+    if (options.includes(normalizedHeader)) {
+      return field;
+    }
+  }
+
+  return null;
+}
+
+export function resolveHeaderCandidate(
+  sourceHeader: string
+):
+  | { candidate: HeaderCandidate; warning?: string }
+  | { candidate: null; ambiguity: string[] }
+  | { candidate: null } {
+  const normalizedHeader = normalizeColumnName(sourceHeader);
+
+  if (!normalizedHeader) {
+    return { candidate: null };
+  }
+
+  for (const field of STANDARD_FIELDS) {
+    if (normalizeColumnName(field.name) === normalizedHeader) {
+      return {
+        candidate: {
+          canonicalName: field.name,
+          kind: "standard",
+          standardField: field.name,
+          matchMethod: "exact",
+          confidence: 1,
+        },
+      };
+    }
+  }
+
+  const aliasMatches = STANDARD_FIELDS.filter((field) =>
+    field.aliases.some((alias) => normalizeColumnName(alias) === normalizedHeader)
+  );
+
+  if (aliasMatches.length > 1) {
+    return {
+      candidate: null,
+      ambiguity: aliasMatches.map((field) => field.name),
+    };
+  }
+
+  if (aliasMatches.length === 1) {
+    return {
+      candidate: {
+        canonicalName: aliasMatches[0].name,
+        kind: "standard",
+        standardField: aliasMatches[0].name,
+        matchMethod: "alias",
+        confidence: 0.95,
+      },
+    };
+  }
+
+  const extraField = findExtraFieldMatch(normalizedHeader);
+  if (extraField) {
+    return {
+      candidate: {
+        canonicalName: extraField.canonicalName,
+        kind: "extra",
+        standardField: null,
+        matchMethod: "alias",
+        confidence: 0.95,
+      },
+    };
+  }
+
+  const scoredFields = getStandardScores(normalizedHeader);
+  const [bestMatch, secondBestMatch] = scoredFields;
+
+  if (
+    bestMatch &&
+    bestMatch.score >= FUZZY_MATCH_THRESHOLD &&
+    secondBestMatch &&
+    secondBestMatch.score >= FUZZY_MATCH_THRESHOLD &&
+    bestMatch.score - secondBestMatch.score < FUZZY_MATCH_DELTA
+  ) {
+    return {
+      candidate: null,
+      ambiguity: [bestMatch.field.name, secondBestMatch.field.name],
+    };
+  }
+
+  if (bestMatch && bestMatch.score >= FUZZY_MATCH_THRESHOLD) {
+    return {
+      candidate: {
+        canonicalName: bestMatch.field.name,
+        kind: "standard",
+        standardField: bestMatch.field.name,
+        matchMethod: "fuzzy",
+        confidence: Math.round(bestMatch.score * 100) / 100,
+      },
+      warning: `La columna "${sourceHeader}" se resolvió por similitud contra "${bestMatch.field.name}".`,
+    };
+  }
+
+  return {
+    candidate: {
+      canonicalName: buildExtraColumnKey(sourceHeader),
+      kind: "extra",
+      standardField: null,
+      matchMethod: "none",
+      confidence: 0,
+    },
+  };
+}
+
+export function analyzeSourceHeaders(sourceHeaders: string[]): HeaderAnalysis {
+  const resolutions: HeaderResolution[] = [];
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const seenCanonical = new Map<string, string>();
+
+  for (const sourceHeader of sourceHeaders) {
+    const normalizedHeader = normalizeColumnName(sourceHeader);
+
+    if (!normalizedHeader) {
+      continue;
+    }
+
+    const result = resolveHeaderCandidate(sourceHeader);
+
+    if ("ambiguity" in result && result.ambiguity) {
+      errors.push(
+        `La columna "${sourceHeader}" es ambigua entre ${result.ambiguity
+          .map((candidate) => `"${candidate}"`)
+          .join(" y ")}.`
+      );
+      continue;
+    }
+
+    if (!result.candidate) {
+      continue;
+    }
+
+    const previousHeader = seenCanonical.get(result.candidate.canonicalName);
+    if (previousHeader) {
+      errors.push(
+        `Las columnas "${previousHeader}" y "${sourceHeader}" intentan mapearse al mismo campo "${result.candidate.canonicalName}".`
+      );
+      continue;
+    }
+
+    seenCanonical.set(result.candidate.canonicalName, sourceHeader);
+
+    if (result.warning) {
+      warnings.push(result.warning);
+    }
+
+    resolutions.push({
+      sourceHeader,
+      normalizedHeader,
+      canonicalName: result.candidate.canonicalName,
+      kind: result.candidate.kind,
+      standardField: result.candidate.standardField,
+      matchMethod: result.candidate.matchMethod,
+      confidence: result.candidate.confidence,
+    });
+  }
+
+  return {
+    resolutions,
+    warnings,
+    errors,
+  };
+}
+
 /**
  * Genera el auto-mapeo entre las columnas del archivo fuente y el estándar.
  */
 export function autoMapColumns(sourceHeaders: string[]): ColumnMapping[] {
-  const usedSourceColumns = new Set<string>();
-  const mappings: ColumnMapping[] = [];
+  const analysis = analyzeSourceHeaders(sourceHeaders);
+  const byStandardField = new Map<string, HeaderResolution>();
 
-  for (const field of STANDARD_FIELDS) {
-    const mapping = findBestMatch(field, sourceHeaders, usedSourceColumns);
-    if (mapping.sourceColumn) {
-      usedSourceColumns.add(mapping.sourceColumn);
-    }
-    mappings.push(mapping);
-  }
-
-  return mappings;
-}
-
-function findBestMatch(
-  field: StandardField,
-  sourceHeaders: string[],
-  used: Set<string>
-): ColumnMapping {
-  const available = sourceHeaders.filter((h) => !used.has(h));
-  const normalizedFieldName = normalize(field.name);
-  const normalizedAliases = field.aliases.map(normalize);
-
-  // 1. Exact match on field name
-  for (const header of available) {
-    if (normalize(header) === normalizedFieldName) {
-      return {
-        standardField: field.name,
-        sourceColumn: header,
-        matchMethod: "exact",
-        confidence: 1,
-        required: field.required,
-      };
+  for (const resolution of analysis.resolutions) {
+    if (resolution.standardField) {
+      byStandardField.set(resolution.standardField, resolution);
     }
   }
 
-  // 2. Alias match
-  for (const header of available) {
-    const normalizedHeader = normalize(header);
-    if (normalizedAliases.includes(normalizedHeader)) {
-      return {
-        standardField: field.name,
-        sourceColumn: header,
-        matchMethod: "alias",
-        confidence: 0.95,
-        required: field.required,
-      };
-    }
-  }
+  return STANDARD_FIELDS.map((field) => {
+    const match = byStandardField.get(field.name);
 
-  // 3. Fuzzy match — solo si la similitud es mayor a 0.6
-  let bestMatch: { header: string; score: number } | null = null;
-  for (const header of available) {
-    const normalizedHeader = normalize(header);
-
-    // Comparar contra el nombre del campo
-    const nameScore = similarity(normalizedHeader, normalizedFieldName);
-
-    // Comparar contra cada alias
-    let aliasScore = 0;
-    for (const alias of normalizedAliases) {
-      const s = similarity(normalizedHeader, alias);
-      if (s > aliasScore) aliasScore = s;
-    }
-
-    const score = Math.max(nameScore, aliasScore);
-    if (score > 0.6 && (!bestMatch || score > bestMatch.score)) {
-      bestMatch = { header, score };
-    }
-  }
-
-  if (bestMatch) {
     return {
       standardField: field.name,
-      sourceColumn: bestMatch.header,
-      matchMethod: "fuzzy",
-      confidence: Math.round(bestMatch.score * 100) / 100,
+      sourceColumn: match?.sourceHeader ?? null,
+      matchMethod: match?.matchMethod ?? "none",
+      confidence: match?.confidence ?? 0,
       required: field.required,
     };
-  }
-
-  // 4. No match
-  return {
-    standardField: field.name,
-    sourceColumn: null,
-    matchMethod: "none",
-    confidence: 0,
-    required: field.required,
-  };
+  });
 }
 
 /**

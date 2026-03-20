@@ -7,7 +7,6 @@
 
 import type { ParsedData } from "./csv-parser";
 import {
-  STANDARD_FIELDS,
   DEFAULT_DUPLICATE_KEYS,
   getRequiredFields,
   getCatalogFields,

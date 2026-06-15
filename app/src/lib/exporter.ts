@@ -18,13 +18,30 @@ export function exportToCSV(data: ParsedData): string {
   });
 }
 
+export interface ExtraSheet {
+  name: string;
+  data: ParsedData;
+}
+
 /**
- * Genera un Blob XLSX a partir de ParsedData.
+ * Genera un Blob XLSX a partir de ParsedData. Opcionalmente agrega hojas
+ * adicionales (p. ej. las columnas no mapeadas).
  */
-export function exportToXLSX(data: ParsedData, sheetName = "Estándar"): Blob {
-  const ws = XLSX.utils.json_to_sheet(data.rows, { header: data.headers });
+export function exportToXLSX(
+  data: ParsedData,
+  sheetName = "Estándar",
+  extraSheets: ExtraSheet[] = []
+): Blob {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const ws = XLSX.utils.json_to_sheet(data.rows, { header: data.headers });
+  // Excel limita el nombre de la hoja a 31 caracteres.
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  for (const sheet of extraSheets) {
+    const extraWs = XLSX.utils.json_to_sheet(sheet.data.rows, {
+      header: sheet.data.headers,
+    });
+    XLSX.utils.book_append_sheet(wb, extraWs, sheet.name.slice(0, 31));
+  }
   const buffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   return new Blob([buffer], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

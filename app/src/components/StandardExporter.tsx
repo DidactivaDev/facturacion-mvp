@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { applyMapping, type ColumnMapping } from "@/lib/column-mapper";
+import {
+  applyMapping,
+  getUnmappedSourceColumns,
+  buildUnmappedColumnsData,
+  type ColumnMapping,
+} from "@/lib/column-mapper";
 import {
   exportToCSV,
   exportToXLSX,
@@ -26,6 +31,9 @@ export default function StandardExporter({
   report,
   source,
 }: StandardExporterProps) {
+  const [includeUnmapped, setIncludeUnmapped] = useState(false);
+  const [placement, setPlacement] = useState<"end" | "sheet">("sheet");
+
   const summary = useMemo(() => {
     const mapped = mappings.filter((m) => m.sourceColumn !== null);
     const unmappedRequired = mappings.filter(
@@ -34,15 +42,36 @@ export default function StandardExporter({
     return { mapped: mapped.length, total: mappings.length, unmappedRequired: unmappedRequired.length };
   }, [mappings]);
 
-  const standardData = useMemo(() => applyMapping(data, mappings), [data, mappings]);
+  const unmappedColumns = useMemo(
+    () => getUnmappedSourceColumns(data, mappings),
+    [data, mappings]
+  );
+
+
+  const appendToTable = includeUnmapped && placement === "end";
+  const previewData = useMemo(
+    () => applyMapping(data, mappings, { includeUnmapped: appendToTable }),
+    [data, mappings, appendToTable]
+  );
 
   const handleExportCSV = () => {
-    const csv = exportToCSV(standardData);
+    const csvData = applyMapping(data, mappings, { includeUnmapped });
+    const csv = exportToCSV(csvData);
     downloadText(csv, `estandar_ccinshae_${Date.now()}.csv`);
   };
 
   const handleExportXLSX = () => {
-    const blob = exportToXLSX(standardData, "CCINSHAE");
+    let blob: Blob;
+    if (includeUnmapped && placement === "sheet") {
+      const standardData = applyMapping(data, mappings);
+      const extraData = buildUnmappedColumnsData(data, unmappedColumns);
+      blob = exportToXLSX(standardData, "CCINSHAE", [
+        { name: "Columnas no mapeadas", data: extraData },
+      ]);
+    } else {
+      const xlsxData = applyMapping(data, mappings, { includeUnmapped });
+      blob = exportToXLSX(xlsxData, "CCINSHAE");
+    }
     downloadBlob(blob, `estandar_ccinshae_${Date.now()}.xlsx`);
   };
 
@@ -93,43 +122,99 @@ export default function StandardExporter({
           </p>
         )}
 
+        {/* Incluir columnas no mapeadas */}
+        {unmappedColumns.length > 0 && (
+          <div className="rounded-md border bg-muted/20 px-3 py-2.5 mb-4 space-y-2">
+            <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeUnmapped}
+                onChange={(e) => setIncludeUnmapped(e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              Incluir columnas no mapeadas ({unmappedColumns.length})
+            </label>
+
+            {includeUnmapped && (
+              <div className="pl-6 space-y-1.5">
+                <span className="text-[11px] text-muted-foreground">Ubicación:</span>
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-2 text-[11px] cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="unmapped-placement"
+                      checked={placement === "end"}
+                      onChange={() => setPlacement("end")}
+                      className="h-3 w-3 accent-primary"
+                    />
+                    Al final de la tabla
+                  </label>
+                  <label className="flex items-center gap-2 text-[11px] cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="unmapped-placement"
+                      checked={placement === "sheet"}
+                      onChange={() => setPlacement("sheet")}
+                      className="h-3 w-3 accent-primary"
+                    />
+                    En hoja aparte{" "}
+                    <span className="text-muted-foreground">
+                      (solo Excel; en CSV se anexan al final)
+                    </span>
+                  </label>
+                </div>
+                <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+                  Columnas: {unmappedColumns.join(", ")}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Preview */}
         <div className="rounded-md border overflow-hidden mb-4">
           <div className="text-xs font-medium px-3 py-2 bg-muted/30 border-b">
-            Vista previa del estándar ({standardData.totalRows} filas, {standardData.headers.length} columnas)
+            Vista previa del estándar ({previewData.totalRows} filas, {previewData.headers.length} columnas)
           </div>
           <div className="overflow-auto max-h-[200px] custom-scrollbar">
             <table className="w-full text-[11px]">
               <thead>
                 <tr className="border-b bg-muted/20 sticky top-0">
-                  {standardData.headers.slice(0, 8).map((h) => (
+                  {previewData.headers.slice(0, 8).map((h) => (
                     <th key={h} className="text-left px-2 py-1.5 font-semibold whitespace-nowrap">
                       {h.length > 20 ? h.slice(0, 20) + "…" : h}
                     </th>
                   ))}
-                  {standardData.headers.length > 8 && (
+                  {previewData.headers.length > 8 && (
                     <th className="px-2 py-1.5 text-muted-foreground">
-                      +{standardData.headers.length - 8} más
+                      +{previewData.headers.length - 8} más
                     </th>
                   )}
                 </tr>
               </thead>
               <tbody>
-                {standardData.rows.slice(0, 5).map((row, i) => (
+                {previewData.rows.slice(0, 5).map((row, i) => (
                   <tr key={i} className="border-b">
-                    {standardData.headers.slice(0, 8).map((h) => (
+                    {previewData.headers.slice(0, 8).map((h) => (
                       <td key={h} className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
                         {(row[h] || "").toString().slice(0, 20) || (
                           <span className="text-rose-400 italic">vacío</span>
                         )}
                       </td>
                     ))}
-                    {standardData.headers.length > 8 && <td />}
+                    {previewData.headers.length > 8 && <td />}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {includeUnmapped && placement === "sheet" && (
+            <div className="text-[11px] text-muted-foreground px-3 py-2 border-t bg-muted/10">
+              + se incluirá una hoja aparte{" "}
+              <span className="font-medium">«Columnas no mapeadas»</span> con{" "}
+              {unmappedColumns.length} columna(s). En CSV se anexan al final.
+            </div>
+          )}
         </div>
 
         {/* Export buttons */}

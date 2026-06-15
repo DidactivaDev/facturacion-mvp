@@ -404,15 +404,41 @@ export function autoMapColumns(sourceHeaders: string[]): ColumnMapping[] {
   });
 }
 
+
+export function getUnmappedSourceColumns(
+  data: ParsedData,
+  mappings: ColumnMapping[]
+): string[] {
+  const used = new Set(
+    mappings
+      .map((m) => m.sourceColumn)
+      .filter((c): c is string => c !== null)
+  );
+  return data.headers.filter((h) => !used.has(h));
+}
+
+export interface ApplyMappingOptions {
+  includeUnmapped?: boolean;
+}
+
 /**
  * Aplica el mapeo a los datos: transforma ParsedData al formato estándar.
  * Las columnas sin mapeo quedan como cadena vacía.
  */
 export function applyMapping(
   data: ParsedData,
-  mappings: ColumnMapping[]
+  mappings: ColumnMapping[],
+  options: ApplyMappingOptions = {}
 ): ParsedData {
   const standardHeaders = mappings.map((m) => m.standardField);
+
+  const extraColumns = options.includeUnmapped
+    ? getUnmappedSourceColumns(data, mappings)
+    : [];
+  const standardSet = new Set(standardHeaders);
+  const extraHeaders = extraColumns.map((col) =>
+    standardSet.has(col) ? `${col} (fuente)` : col
+  );
 
   const standardRows = data.rows.map((row) => {
     const newRow: Record<string, string> = {};
@@ -423,14 +449,33 @@ export function applyMapping(
         newRow[mapping.standardField] = "";
       }
     }
+    extraColumns.forEach((col, i) => {
+      newRow[extraHeaders[i]] = row[col] ?? "";
+    });
     return newRow;
   });
 
   return {
-    headers: standardHeaders,
+    headers: [...standardHeaders, ...extraHeaders],
     rows: standardRows,
     totalRows: standardRows.length,
   };
+}
+
+
+export function buildUnmappedColumnsData(
+  data: ParsedData,
+  unmappedColumns: string[]
+): ParsedData {
+  const headers = ["# fila", ...unmappedColumns];
+  const rows = data.rows.map((row, i) => {
+    const newRow: Record<string, string> = { "# fila": String(i + 1) };
+    for (const col of unmappedColumns) {
+      newRow[col] = row[col] ?? "";
+    }
+    return newRow;
+  });
+  return { headers, rows, totalRows: rows.length };
 }
 
 /**

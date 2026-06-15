@@ -175,7 +175,7 @@ export default function Home() {
           /* Data loaded state */
           <div className="space-y-4">
             {/* KPI Cards */}
-            <KPIDashboard data={data} />
+            <KPIDashboard data={data} report={report} />
 
             {/* Tabs */}
             <div className="border-b">

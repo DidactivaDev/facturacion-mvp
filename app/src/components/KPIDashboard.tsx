@@ -1,9 +1,11 @@
 "use client";
 
 import type { ParsedData } from "@/lib/csv-parser";
+import type { QualityReport } from "@/lib/data-quality";
 
 interface KPIDashboardProps {
   data: ParsedData;
+  report?: QualityReport | null;
 }
 
 interface KPI {
@@ -135,7 +137,7 @@ const ESTATUS_PATTERNS = [
   "prioridad", "nivel de prioridad",
 ];
 
-function computeKPIs(data: ParsedData): KPI[] {
+function computeKPIs(data: ParsedData, report?: QualityReport | null): KPI[] {
   const rows = data.rows;
   const headers = data.headers;
   const kpis: KPI[] = [];
@@ -246,8 +248,18 @@ function computeKPIs(data: ParsedData): KPI[] {
     }
   }
 
-  // ── KPI 4: Alertas / Estatus ──
-  if (estatusCol) {
+  if (report) {
+    const { totalAlerts, highAlerts, mediumAlerts, lowAlerts } = report.summary;
+    kpis.push({
+      label: "Alertas",
+      value: totalAlerts.toString(),
+      detail:
+        totalAlerts > 0
+          ? `${highAlerts} altas · ${mediumAlerts} medias · ${lowAlerts} bajas`
+          : "sin alertas detectadas",
+      color: highAlerts > 0 ? "red" : totalAlerts > 0 ? "amber" : "green",
+    });
+  } else if (estatusCol) {
     const vals = rows.map((r) => r[estatusCol]?.trim().toLowerCase()).filter(Boolean);
     const errorKw = ["error", "rechazado", "anulado", "cancelado", "sin suficiencia"];
     const alertas = vals.filter((v) =>
@@ -320,8 +332,8 @@ const icons = {
   ),
 };
 
-export default function KPIDashboard({ data }: KPIDashboardProps) {
-  const kpis = computeKPIs(data);
+export default function KPIDashboard({ data, report }: KPIDashboardProps) {
+  const kpis = computeKPIs(data, report);
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

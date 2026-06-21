@@ -60,7 +60,7 @@ export default function ResponseCard({
         className={`shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold mt-0.5 ${
           isUser
             ? "bg-primary text-primary-foreground"
-            : "bg-gradient-to-br from-violet-500 to-blue-500 text-white"
+            : "bg-gradient-to-br from-[#9f2241] to-[#235b4e] text-white"
         }`}
       >
         {isUser ? (

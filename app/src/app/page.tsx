@@ -135,7 +135,7 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-sm font-semibold leading-none">
-                Análisis de precisión de gastos
+                Análisis de previsión de gastos
               </h1>
               <p className="text-[11px] text-muted-foreground leading-none mt-0.5">
                 Estandarización al formato CCINSHAE
@@ -161,10 +161,10 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)]">
             <div className="text-center mb-8 space-y-3">
               <h2 className="text-2xl font-bold tracking-tight">
-                Analiza los datos de las precisiones de gastos
+                Analiza los datos de las previsiones de gastos
               </h2>
               <p className="text-muted-foreground max-w-md mx-auto">
-                Carga un archivo CSV, Excel o conecta un Google Sheet para
+                Carga un archivo CSV, Excel o conecta una hoja de Google Sheets para
                 analizar calidad, estandarizar al formato CCINSHAE y consultar
                 con inteligencia artificial
               </p>

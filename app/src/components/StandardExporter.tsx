@@ -118,7 +118,7 @@ export default function StandardExporter({
         {summary.unmappedRequired > 0 && (
           <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-md px-3 py-2 mb-3">
             Algunos campos obligatorios no tienen mapeo. Se exportarán vacíos.
-            Revisa el mapeo de columnas para mejorar la calidad del output.
+            Revisa el mapeo de columnas para mejorar la calidad del resultado exportado.
           </p>
         )}
 

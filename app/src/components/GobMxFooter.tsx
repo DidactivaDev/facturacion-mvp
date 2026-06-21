@@ -70,7 +70,7 @@ export function GobMxFooter() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-4 py-4 text-xs sm:flex-row">
           <span>Gobierno de México · {year}</span>
           <span className="text-gobmx-neutro-light">
-            Agente de análisis de precisión de gastos · CCINSHAE
+            Agente de análisis de previsión de gastos · CCINSHAE
           </span>
         </div>
       </div>

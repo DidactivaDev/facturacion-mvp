@@ -74,7 +74,7 @@ const SUGGESTED_QUERIES = [
 const AUTO_PROMPT_QUERY =
   "Resume todas las alertas detectadas en el archivo, explica qué tipos de corrección puedes aplicar y pregunta si deseas que normalice o corrija los datos.";
 const AUTO_PROMPT_LOADING_MESSAGE =
-  "Estoy analizando tu archivo, espera un momento";
+  "Estoy analizando tu archivo. Espera un momento.";
 
 function buildCorrectionSourceName(source: string): string {
   return source.endsWith(" (corregido)") ? source : `${source} (corregido)`;
@@ -395,7 +395,7 @@ export default function ChatInterface({
                 Analizo {data.totalRows} registros con {data.headers.length} campos.
                 {report.summary.totalAlerts > 0
                   ? ` También detecté ${report.summary.totalAlerts} alerta(s) de calidad y puedo proponer correcciones seguras.`
-                  : " Puedo calcular totales, encontrar patrones y detectar anomalias."}
+                  : " Puedo calcular totales, encontrar patrones y detectar anomalías."}
               </p>
             </div>
 
@@ -582,7 +582,7 @@ export default function ChatInterface({
           </Button>
         </div>
         <p className="text-[10px] text-muted-foreground/50 text-center mt-2">
-          Enter para enviar &middot; Shift+Enter para nueva linea
+          Enter para enviar &middot; Shift+Enter para nueva línea
         </p>
       </div>
     </div>

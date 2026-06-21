@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "CCINSHAE",
-  description: "Agente de análisis de precisión de gastos",
+  description: "Agente de análisis de previsión de gastos",
 };
 
 export default function RootLayout({

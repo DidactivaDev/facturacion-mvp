@@ -17,10 +17,10 @@ const matchMethodLabels: Record<string, string> = {
 };
 
 const matchMethodColors: Record<string, string> = {
-  exact: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
-  alias: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
-  fuzzy: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
-  none: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400",
+  exact: "bg-[#235b4e]/12 text-[#235b4e] dark:bg-[#235b4e]/30 dark:text-[#3e8e7c]",
+  alias: "bg-[#5a9b8c]/18 text-[#235b4e] dark:bg-[#3e8e7c]/25 dark:text-[#7fc0b0]",
+  fuzzy: "bg-[#bc955c]/18 text-[#7a5b22] dark:bg-[#bc955c]/25 dark:text-[#d4ab6f]",
+  none: "bg-[#9f2241]/12 text-[#9f2241] dark:bg-[#9f2241]/30 dark:text-[#c7405f]",
 };
 
 export default function ColumnMapperView({

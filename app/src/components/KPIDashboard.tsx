@@ -2,6 +2,12 @@
 
 import type { ParsedData } from "@/lib/csv-parser";
 import type { QualityReport } from "@/lib/data-quality";
+import {
+  parseMoney,
+  detectPaymentColumns,
+  classifyPayment,
+  hasPaymentSignal,
+} from "@/lib/payment-status";
 
 interface KPIDashboardProps {
   data: ParsedData;
@@ -66,39 +72,6 @@ function findColumn(
   return null;
 }
 
-/**
- * Parsea un valor monetario
- */
-function parseMoney(raw: unknown): number {
-  if (raw === null || raw === undefined) return 0;
-  const s = String(raw).trim();
-  if (!s || s === "-" || s === "$ -" || s === "$-") return 0;
-  // Quitar $, espacios, y comas de miles
-  const cleaned = s.replace(/[$\s,]/g, "");
-  const val = parseFloat(cleaned);
-  return isNaN(val) ? 0 : val;
-}
-
-function isTruthy(val: unknown): boolean {
-  if (val === true) return true;
-  if (typeof val === "string") {
-    const v = val.trim().toLowerCase();
-    return v === "true" || v === "1" || v === "si" || v === "sí" || v === "yes";
-  }
-  if (typeof val === "number") return val === 1;
-  return false;
-}
-
-function isFalsy(val: unknown): boolean {
-  if (val === false) return true;
-  if (typeof val === "string") {
-    const v = val.trim().toLowerCase();
-    return v === "false" || v === "0" || v === "no";
-  }
-  if (typeof val === "number") return val === 0;
-  return false;
-}
-
 /* ─────── Detección inteligente de columnas por concepto ─────── */
 
 /** Columna que representa el monto/importe principal */
@@ -113,20 +86,6 @@ const PROVEEDOR_PATTERNS = [
   "proveedor", "nombre proveedor", "razon social", "razon_social",
   "proveedor factura", "indique el proveedor", "nombre_proveedor",
   "si cuenta con factura indique el proveedor",
-];
-
-/** Columna que indica si está facturado */
-const FACTURADO_PATTERNS = [
-  "esta_facturado", "esta facturado", "facturado",
-  "cuenta con factura", "factura recategorizada",
-  "cuenta con factura recategorizada",
-];
-
-/** Columna que indica si está pagado */
-const PAGADO_PATTERNS = [
-  "esta_pagado", "esta pagado", "pagado", "estatus pago",
-  "importe pagado", "importe pagado del contrato",
-  "monto pagado", "monto_pagado",
 ];
 
 /** Columna de estatus/workflow */
@@ -145,8 +104,6 @@ function computeKPIs(data: ParsedData, report?: QualityReport | null): KPI[] {
   // ── Detectar columnas ──
   const montoCol = findColumn(headers, MONTO_PATTERNS);
   const provCol = findColumn(headers, PROVEEDOR_PATTERNS);
-  const facturadoCol = findColumn(headers, FACTURADO_PATTERNS);
-  const pagadoCol = findColumn(headers, PAGADO_PATTERNS);
   const estatusCol = findColumn(headers, ESTATUS_PATTERNS);
 
   // ── KPI 1: Monto total ──
@@ -169,13 +126,9 @@ function computeKPIs(data: ParsedData, report?: QualityReport | null): KPI[] {
   }
 
   // ── KPI 2: Pendiente de pago ──
-  if (pagadoCol && montoCol) {
-    // Si hay columna de pagado numérica (como "Importe Pagado del Contrato"),
-    // pendiente = monto donde pagado = 0 o vacío
-    const pendientes = rows.filter((r) => {
-      const pagVal = parseMoney(r[pagadoCol]);
-      return pagVal === 0;
-    });
+  const payCols = detectPaymentColumns(headers);
+  if (montoCol) {
+    const pendientes = rows.filter((r) => classifyPayment(r, payCols) === "pending");
     const montoPend = pendientes.reduce(
       (sum, r) => sum + parseMoney(r[montoCol]),
       0
@@ -183,32 +136,18 @@ function computeKPIs(data: ParsedData, report?: QualityReport | null): KPI[] {
     kpis.push({
       label: "Pendiente de pago",
       value: `$${montoPend.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`,
-      detail: `${pendientes.length} registros sin pago`,
-      color: "amber",
-    });
-  } else if (facturadoCol && montoCol) {
-    // Fallback: si hay campo booleano de facturado/pagado
-    const pendientes = rows.filter(
-      (r) =>
-        isTruthy(r[facturadoCol]) &&
-        (!pagadoCol || isFalsy(r[pagadoCol]))
-    );
-    const montoPend = pendientes.reduce(
-      (sum, r) => sum + parseMoney(r[montoCol]),
-      0
-    );
-    kpis.push({
-      label: "Pendiente de pago",
-      value: `$${montoPend.toLocaleString("es-MX", { minimumFractionDigits: 2 })}`,
-      detail: `${pendientes.length} facturas`,
-      color: "amber",
+      detail: hasPaymentSignal(payCols)
+        ? `${pendientes.length} de ${rows.length} sin pago confirmado`
+        : `${pendientes.length} registros · sin estatus, se asumen pendientes`,
+      color: montoPend > 0 ? "amber" : "green",
     });
   } else {
+    const pendientes = rows.filter((r) => classifyPayment(r, payCols) === "pending");
     kpis.push({
       label: "Pendiente de pago",
-      value: "N/D",
-      detail: "sin columna de pago detectada",
-      color: "amber",
+      value: pendientes.length.toLocaleString("es-MX"),
+      detail: "registros pendientes (sin columna de monto)",
+      color: pendientes.length > 0 ? "amber" : "green",
     });
   }
 
@@ -296,16 +235,16 @@ function computeKPIs(data: ParsedData, report?: QualityReport | null): KPI[] {
 }
 
 const colorClasses = {
-  blue: "from-blue-500/10 to-blue-600/5 border-blue-200/60 dark:border-blue-800/40",
-  green: "from-emerald-500/10 to-emerald-600/5 border-emerald-200/60 dark:border-emerald-800/40",
-  amber: "from-amber-500/10 to-amber-600/5 border-amber-200/60 dark:border-amber-800/40",
+  blue: "from-[#9f2241]/10 to-[#9f2241]/5 border-[#9f2241]/25 dark:border-[#9f2241]/40",
+  green: "from-[#235b4e]/10 to-[#235b4e]/5 border-[#235b4e]/25 dark:border-[#235b4e]/40",
+  amber: "from-[#bc955c]/15 to-[#bc955c]/5 border-[#bc955c]/30 dark:border-[#bc955c]/40",
   red: "from-rose-500/10 to-rose-600/5 border-rose-200/60 dark:border-rose-800/40",
 };
 
 const iconColorClasses = {
-  blue: "text-blue-600 dark:text-blue-400",
-  green: "text-emerald-600 dark:text-emerald-400",
-  amber: "text-amber-600 dark:text-amber-400",
+  blue: "text-[#9f2241] dark:text-[#c7405f]",
+  green: "text-[#235b4e] dark:text-[#3e8e7c]",
+  amber: "text-[#bc955c] dark:text-[#d4ab6f]",
   red: "text-rose-600 dark:text-rose-400",
 };
 

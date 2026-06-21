@@ -1,10 +1,17 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
+import { Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { GobMxHeader } from "@/components/GobMxHeader";
+import { GobMxFooter } from "@/components/GobMxFooter";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const openSans = localFont({
+  src: [
+    { path: "./fonts/OpenSans-Variable.woff2", style: "normal", weight: "300 800" },
+    { path: "./fonts/OpenSans-Variable-Italic.woff2", style: "italic", weight: "300 800" },
+  ],
+  variable: "--font-open-sans",
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
@@ -25,9 +32,11 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${openSans.variable} ${geistMono.variable} antialiased flex min-h-screen flex-col bg-background`}
       >
-        {children}
+        <GobMxHeader />
+        <div className="flex-1">{children}</div>
+        <GobMxFooter />
       </body>
     </html>
   );

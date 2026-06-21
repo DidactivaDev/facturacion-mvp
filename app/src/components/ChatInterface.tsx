@@ -387,7 +387,7 @@ export default function ChatInterface({
         {isEmpty ? (
           <div className="flex flex-col items-center justify-center h-full gap-6">
             <div className="text-center space-y-2">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-500/10 mb-2">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-[#9f2241]/10 to-[#235b4e]/10 mb-2">
                 <Bot className="w-6 h-6 text-primary" />
               </div>
               <h3 className="text-lg font-semibold">Pregunta sobre tus datos</h3>
@@ -458,7 +458,7 @@ export default function ChatInterface({
       <div className="border-t bg-muted/10 p-4">
         {/* Normalize action bar */}
         {!normalizedFromCard && !dismissedFromCard && !pendingProposal && !isStreaming && messages.some((m) => m.kind === "auto-analysis" && m.reportSnapshot?.alerts.some((a) => a.category === "catalog")) && (
-          <div className="max-w-3xl mx-auto mb-3 rounded-xl border bg-gradient-to-r from-primary/5 to-violet-500/5 border-primary/20 px-4 py-3 shadow-sm animate-in fade-in duration-300">
+          <div className="max-w-3xl mx-auto mb-3 rounded-xl border bg-gradient-to-r from-primary/5 to-[#235b4e]/5 border-primary/20 px-4 py-3 shadow-sm animate-in fade-in duration-300">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="space-y-0.5">
                 <p className="text-sm font-medium text-foreground">

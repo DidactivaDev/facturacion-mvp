@@ -50,7 +50,7 @@ export default function ChatQualitySummaryCard({
       <div className="grid grid-cols-2 gap-2 border-b bg-background px-4 py-3 md:grid-cols-4">
         <SummaryStat label="Altas" value={report.summary.highAlerts} tone="text-rose-600" />
         <SummaryStat label="Medias" value={report.summary.mediumAlerts} tone="text-amber-600" />
-        <SummaryStat label="Bajas" value={report.summary.lowAlerts} tone="text-blue-600" />
+        <SummaryStat label="Bajas" value={report.summary.lowAlerts} tone="text-[#235b4e]" />
         <SummaryStat label="Registros" value={report.totalRows} tone="text-foreground" />
       </div>
 

@@ -40,7 +40,7 @@ function StatsTable({ stats }: { stats: ColumnStats[] }) {
               <td className="px-3 py-2">
                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                   s.isNumeric
-                    ? "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400"
+                    ? "bg-[#235b4e]/10 text-[#235b4e] dark:bg-[#235b4e]/30 dark:text-[#3e8e7c]"
                     : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                 }`}>
                   {s.isNumeric ? "numérico" : "texto"}
@@ -81,7 +81,7 @@ export default function QualityReportView({ report }: QualityReportViewProps) {
           <p className="text-xs text-muted-foreground">Alertas medias</p>
         </div>
         <div className="rounded-lg border bg-card p-3 text-center">
-          <p className="text-2xl font-bold text-blue-600">{report.summary.lowAlerts}</p>
+          <p className="text-2xl font-bold text-[#235b4e] dark:text-[#3e8e7c]">{report.summary.lowAlerts}</p>
           <p className="text-xs text-muted-foreground">Alertas bajas</p>
         </div>
       </div>
